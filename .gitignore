@@ -1,0 +1,52 @@
+# ------------------------------------------------------------- build output
+# cargo build dirs, at any depth (the M0 spike has its own)
+target/
+**/*.rs.bk
+
+# SwiftPM and Xcode
+clients/.build/
+clients/.swiftpm/
+DerivedData/
+*.xcuserstate
+
+# the assembled OpenFlow.app
+clients/build/
+
+# ---------------------------------------------------------- vendored sources
+# whisper.cpp is a third-party checkout: ~2.7 GB, with its own .git and the
+# downloaded model weights inside it. clients/build-macos.sh clones it at a
+# pinned revision, so it does not belong in this history. Safe to delete and
+# re-run that script.
+/m0/whisper.cpp/
+
+# -------------------------------------------------------------- model weights
+# Hundreds of MB each and freely re-downloadable. Never commit these.
+*.bin
+*.gguf
+*.mlmodelc/
+
+# --------------------------------------------------------------------- audio
+# `say`-generated fixtures, reproducible via m0/scripts/gen_audio.sh
+/m0/audio/*.wav
+/m0/audio/try/
+
+# Real dictation recordings: the user's actual voice, often saying genuinely
+# private things. These must never reach a remote. Listed separately from the
+# generated audio above so the reason stays legible.
+/m0/audio/real/
+
+# ------------------------------------------------------------------- runtime
+# Local dictation history — transcripts of everything ever spoken.
+*.sqlite
+*.sqlite-wal
+*.sqlite-shm
+
+# personal word list
+/m0/vocab.txt
+
+# ------------------------------------------------------------------ platform
+.DS_Store
+*.swp
+*~
+.idea/
+.vscode/

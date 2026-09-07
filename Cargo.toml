@@ -1,0 +1,12 @@
+[workspace]
+resolver = "2"
+members = ["crates/openflow-core", "crates/openflow-cli", "crates/openflow-ffi"]
+
+[workspace.package]
+version = "0.1.0"
+edition = "2021"
+license = "MIT"
+
+[profile.release]
+lto = true
+opt-level = 3

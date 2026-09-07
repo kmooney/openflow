@@ -1,0 +1,10 @@
+[package]
+name = "openflow-core"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+description = "Deterministic dictation formatting, normalization, and the edit ledger."
+
+[lib]
+name = "openflow_core"
+path = "src/lib.rs"
