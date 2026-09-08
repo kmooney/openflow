@@ -10,7 +10,6 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     private var model: AppModel!
     private var windowController: MainWindowController!
     private var bag = Set<AnyCancellable>()
-    private var frontApp: String?
     private var hotkeyReady = false
 
     static var supportDir: URL {
@@ -50,6 +49,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
         // Menu bar mirrors the model rather than keeping its own copy.
         model.$state.sink { [weak self] in self?.render($0) }.store(in: &bag)
+        model.$elapsed.sink { [weak self] in self?.showElapsed($0) }.store(in: &bag)
         model.objectWillChange
             .sink { [weak self] in DispatchQueue.main.async { self?.buildMenu() } }
             .store(in: &bag)
@@ -64,21 +64,49 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
         hotkey.onPress = { [weak self] in
             guard let self else { return }
-            // Capture focus before recording: the status item must not steal it.
-            self.frontApp = Paster.frontmostApp
-            self.model.begin()
+            // Read focus before recording: the status item must not steal it,
+            // and by the time the utterance ends the field may be gone.
+            self.model.begin(in: FocusInspector.current())
         }
         hotkey.onRelease = { [weak self] in
             guard let self else { return }
-            self.model.finish(.paste(appContext: self.frontApp))
+            self.model.finish(.paste)
         }
 
         setUpHotkey()
+        followFrontmostApp()
 
         buildMenu()
         if !UserDefaults.standard.bool(forKey: "launchedBefore") {
             UserDefaults.standard.set(true, forKey: "launchedBefore")
             windowController.show()
+        }
+    }
+
+    // MARK: - context
+
+    /// Track the frontmost app so the menu bar shows the register you are
+    /// about to get, before you hold the key. Field-level detail waits for the
+    /// press -- polling the focused element continuously would be an
+    /// Accessibility round-trip into another process several times a second,
+    /// for a label.
+    private func followFrontmostApp() {
+        NSWorkspace.shared.notificationCenter.addObserver(
+            forName: NSWorkspace.didActivateApplicationNotification,
+            object: nil, queue: .main
+        ) { [weak self] note in
+            guard let self,
+                  let app = note.userInfo?[NSWorkspace.applicationUserInfoKey]
+                    as? NSRunningApplication,
+                  // Our own window is where the user *corrects* the tone, so
+                  // activating it must leave the context they are correcting
+                  // in place.
+                  app.bundleIdentifier != Bundle.main.bundleIdentifier
+            else { return }
+            MainActor.assumeIsolated {
+                self.model?.adopt(DictationContext(bundleID: app.bundleIdentifier,
+                                                   appName: app.localizedName))
+            }
         }
     }
 
@@ -131,12 +159,29 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         switch state {
         case .recording:
             setIcon(idle: false)
+            showElapsed(0)          // don't wait for the first tick to appear
         case .thinking:
             statusItem.button?.title = " …"
         case .idle, .failed:
             setIcon(idle: true)
             statusItem.button?.title = ""
         }
+    }
+
+    /// Count up next to the icon while the chord is held, so the length of
+    /// what you are about to send is visible without opening anything.
+    ///
+    /// Monospaced digits deliberately: a proportional font re-measures the
+    /// title ten times a second, and the whole menu bar shuffles sideways as
+    /// the tenths roll over.
+    private func showElapsed(_ seconds: TimeInterval) {
+        guard let button = statusItem.button, model?.isRecording == true else { return }
+        button.attributedTitle = NSAttributedString(
+            string: String(format: " %.1fs", seconds),
+            attributes: [
+                .font: NSFont.monospacedDigitSystemFont(ofSize: NSFont.smallSystemFontSize,
+                                                        weight: .regular),
+            ])
     }
 
     private func setIcon(idle: Bool) {
@@ -163,12 +208,16 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         }
         menu.addItem(.separator())
 
+        menu.addItem(header(model.toneExplanation))
         for t in Tone.allCases {
             let i = NSMenuItem(title: t.name, action: #selector(pickTone(_:)), keyEquivalent: "")
             i.target = self
             i.state = (t == model.tone) ? .on : .off
             i.tag = Int(t.rawValue)
             menu.addItem(i)
+        }
+        if model.toneIsRemembered {
+            add(menu, "Forget Tone for \(model.context.label)", #selector(forgetTone))
         }
         menu.addItem(.separator())
         let audio = NSMenuItem(title: "Keep Audio for Debugging",
@@ -198,8 +247,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     @objc private func openWindow() { windowController.show() }
 
     @objc private func pickTone(_ sender: NSMenuItem) {
-        model.tone = Tone(rawValue: UInt32(sender.tag)) ?? .formal
+        model.chooseTone(Tone(rawValue: UInt32(sender.tag)) ?? .formal)
     }
+
+    @objc private func forgetTone() { model.forgetTone() }
 
     @objc private func openAccessibilitySettings() {
         let url = URL(string:
@@ -230,6 +281,13 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
     @objc private func quit() { NSApp.terminate(nil) }
 
+    private static func resolveModel() -> URL? {
+        let dir = supportDir.appendingPathComponent("models")
+        return ["ggml-small.en.bin", "ggml-base.en.bin", "ggml-large-v3-turbo.bin"]
+            .map { dir.appendingPathComponent($0) }
+            .first { FileManager.default.fileExists(atPath: $0.path) }
+    }
+
     private func notify(_ title: String, _ body: String) {
         let a = NSAlert()
         a.messageText = title
@@ -240,12 +298,5 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     private func fatal(_ message: String) {
         notify("OpenFlow can't start", message)
         NSApp.terminate(nil)
-    }
-
-    private static func resolveModel() -> URL? {
-        let dir = supportDir.appendingPathComponent("models")
-        return ["ggml-small.en.bin", "ggml-base.en.bin", "ggml-large-v3-turbo.bin"]
-            .map { dir.appendingPathComponent($0) }
-            .first { FileManager.default.fileExists(atPath: $0.path) }
     }
 }

@@ -26,7 +26,8 @@ open build/OpenFlow.app
 
 The script builds the Rust core, builds whisper.cpp statically if needed,
 compiles the Swift, assembles the `.app`, and links a model from `m0/` into
-`~/Library/Application Support/OpenFlow/models/`.
+`~/Library/Application Support/OpenFlow/models/` so the first run is instant.
+
 
 ## Using it
 
@@ -37,6 +38,14 @@ into whatever has focus.
 button, and the full history: search it, copy any entry, delete entries one at a
 time or all at once. Closing the window leaves the app running in the menu bar;
 reopen from the same menu item.
+
+**Tone follows where you are dictating.** An address bar gets *very casual*,
+Mail gets *formal*, Slack gets *casual*. Picking a register is what teaches it:
+whatever you choose is remembered for the app — and for the address or search
+field specifically, which is the one field whose register differs from the app
+around it. The list button beside the picker shows everything remembered, and
+lets you change or delete any of it. Nothing is learned while you dictate with
+the Listen button, which has no destination to attribute a choice to.
 
 Two details that matter:
 

@@ -39,14 +39,24 @@ final class AppModel: ObservableObject {
     }
     let playback = AudioPlayback()
 
-    @Published var tone: Tone {
+    /// The register the next utterance will use. Set automatically from
+    /// `memory` whenever focus moves; set by hand through `chooseTone`, which
+    /// is also how the memory is taught.
+    @Published private(set) var tone: Tone {
         didSet {
-            UserDefaults.standard.set(Int(tone.rawValue), forKey: "tone")
+            guard tone != oldValue else { return }
             engine.tone = tone
         }
     }
 
+    /// Where the next utterance is going, and why it has the tone it has.
+    @Published private(set) var context: DictationContext = .unknown
+    @Published private(set) var toneSource: ToneMemory.Source = .fallback
+    /// Bumped on every write so SwiftUI reloads the remembered-tones list.
+    @Published private(set) var memoryRevision = 0
+
     let engine: DictationEngine
+    let memory: ToneMemory
     private let store: Store
     private var tick: Timer?
 
@@ -54,7 +64,9 @@ final class AppModel: ObservableObject {
         self.engine = engine
         self.store = store
         self.stats = store.stats()
-        self.tone = Tone(rawValue: UInt32(UserDefaults.standard.integer(forKey: "tone"))) ?? .formal
+        let fallback = Tone(rawValue: UInt32(UserDefaults.standard.integer(forKey: "tone"))) ?? .formal
+        self.tone = fallback
+        self.memory = ToneMemory(storage: UserDefaultsToneStorage(), fallback: fallback)
         self.keepAudio = UserDefaults.standard.bool(forKey: "keepAudio")
         self.noiseSuppression = UserDefaults.standard.object(forKey: "noiseSuppression") as? Bool ?? true
         engine.tone = tone
@@ -80,7 +92,7 @@ final class AppModel: ObservableObject {
     /// Where the finished text should go.
     enum Delivery {
         /// Paste into whatever had focus. Used by the hotkey.
-        case paste(appContext: String?)
+        case paste
         /// Copy only. Used by the Listen button -- pasting would land the text
         /// in our own window, which is never what you meant.
         case clipboard
@@ -88,9 +100,18 @@ final class AppModel: ObservableObject {
 
     func begin() { engine.begin() }
 
+    /// Push-to-talk entry point. The context is captured before the microphone
+    /// opens -- once we start recording, focus has already moved on.
+    func begin(in context: DictationContext) {
+        adopt(context)
+        engine.begin()
+    }
+
     func finish(_ delivery: Delivery) {
-        let context: String? = { if case .paste(let c) = delivery { return c }; return nil }()
-        engine.end(appContext: context) { [weak self] result in
+        // History records the field, not just the app, so "which register did
+        // I use in Safari's address bar" is answerable after the fact.
+        let key: String? = { if case .paste = delivery { return context.key }; return nil }()
+        engine.end(appContext: key) { [weak self] result in
             Task { @MainActor in
                 guard let self else { return }
                 switch result {
@@ -122,6 +143,89 @@ final class AppModel: ObservableObject {
     /// Listen button: toggles, and always copies rather than pastes.
     func toggleListen() {
         if isRecording { finish(.clipboard) } else { begin() }
+    }
+
+    // MARK: - tone memory
+
+    /// Point the model at a new destination and take the register that belongs
+    /// to it. Called on the hotkey press with the focused field resolved, and
+    /// on app switches with just the app -- so the menu bar shows the tone you
+    /// are about to get before you press anything.
+    func adopt(_ context: DictationContext) {
+        // An app switch reports no field. Do not let that erase a field we
+        // resolved a moment ago for the same app: the coarser reading is not
+        // news, and dropping to it would flip the picker back and forth.
+        if context.bundleID == self.context.bundleID,
+           context.field == .unknown, self.context.field != .unknown { return }
+
+        self.context = context
+        let resolved = memory.resolve(context)
+        toneSource = resolved.source
+        tone = resolved.tone
+    }
+
+    /// The user picked a register. That is the whole teaching signal: it means
+    /// "this is what I want *here*", so it is written against the current
+    /// context rather than becoming a global mode the user has to remember to
+    /// unset later.
+    func chooseTone(_ picked: Tone) {
+        tone = picked
+        if memory.remember(picked, for: context), let key = context.key {
+            toneSource = .remembered(key)
+            memoryRevision += 1
+            status = "\(picked.name) remembered for \(context.label)"
+        } else {
+            // Nothing to attach it to -- dictating to the clipboard, or no
+            // Accessibility permission. Becomes the global default instead.
+            memory.fallback = picked
+            UserDefaults.standard.set(Int(picked.rawValue), forKey: "tone")
+            toneSource = .fallback
+            status = "\(picked.name) is now the default"
+        }
+        clearStatusSoon()
+    }
+
+    /// Drop what was learned here and fall back to the suggestion, or to the
+    /// global default.
+    func forgetTone(_ key: String? = nil) {
+        if let key { memory.forget(key) } else { memory.forget(context) }
+        memoryRevision += 1
+        adopt(context)
+    }
+
+    func forgetAllTones() {
+        memory.forgetAll()
+        memoryRevision += 1
+        adopt(context)
+    }
+
+    var rememberedTones: [ToneRule] { memory.all }
+
+    /// Edit a rule from the list, which may or may not be the one in play.
+    func remember(_ tone: Tone, forKey key: String) {
+        memory.setTone(tone, forKey: key)
+        memoryRevision += 1
+        adopt(context)
+    }
+
+    /// True when the current register was taught rather than guessed.
+    var toneIsRemembered: Bool {
+        if case .remembered = toneSource { return true }
+        return false
+    }
+
+    /// One line under the picker: what tone applies where, and on what basis.
+    var toneExplanation: String {
+        switch toneSource {
+        case .remembered:
+            return "Remembered for \(context.label)"
+        case .suggested:
+            return "Suggested for \(context.label) — pick one to make it stick"
+        case .fallback:
+            return context.bundleID == nil
+                ? "Default for anywhere with nothing remembered"
+                : "Default — pick one to remember it for \(context.label)"
+        }
     }
 
     private func apply(_ s: DictationState) {

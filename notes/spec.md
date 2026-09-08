@@ -14,6 +14,9 @@ Status: draft for review. Nothing built yet.
   parameter — built and measured in M0
 - v0.9: **vocabulary biasing** for proper nouns (measured, §5.2), spoken
   **quote-unquote** (§4.5), signature handling (§4.4)
+- v2.7: **tone is remembered per app and per field** (§4.4.1) — a URL bar is
+  very casual, Mail is formal, and picking a register teaches the app it was
+  picked in
 - v2.6: keyboard drives the whole cycle (background recording + stop channel);
   Full Access explained rather than stated; fresh audio engine per iOS recording
 - v2.5: **M4 started — iOS app and keyboard extension build**, with the
@@ -499,6 +502,55 @@ audio:
 
 Which means the client needs a way to pick a register at the moment of
 dictation, without breaking the flow of pressing a key and talking (§6.1).
+
+### 4.4.1 Tone memory — the choice starts in the right place
+
+Per-utterance does not mean starting from scratch every utterance. In practice
+the register is nearly a function of *where the words are going*: a URL bar is
+never formal, a mail body usually is, and a chat box sits in between. So the
+client remembers, keyed on the destination, and the picker keeps overriding it
+whenever the general case is wrong.
+
+The key is the frontmost app's bundle id, plus the focused field when the field
+genuinely differs from its app:
+
+```
+com.apple.safari#url   ← very casual
+com.apple.safari       ← whatever the page below deserves
+com.apple.mail         ← formal
+```
+
+Only `url` and `search` get a slot of their own. A subject line wants what the
+mail body wants, so splitting `singleLine` from `multiLine` would make the user
+teach the same lesson twice. Resolution is most-specific-first:
+
+1. what the user taught for this field, then for this app
+2. our shipped suggestion for this app
+3. the field rule — an address or search field is very casual in *any* browser,
+   including one released after we were
+4. the global picker
+
+Anything the user taught outranks everything we ship, at both levels: setting
+Safari to formal means formal in its address bar too, and a built-in rule must
+never quietly win against an explicit choice.
+
+**Picking a tone is the teaching signal.** There is no separate settings table
+to maintain — you correct the register once, where it was wrong, and it is
+remembered for that destination. The corollary is that the memory has to be
+visible: something that changes tone on your behalf reads as a bug the first
+time it guesses wrong, so every learned rule is listed, editable and removable
+in the window (macOS: the list button beside the picker).
+
+Two details that are behaviour, not polish:
+
+- **Focus is read on the key press**, before the microphone opens. By the time
+  the utterance ends, focus has moved. That read is a synchronous IPC call into
+  another process, so it carries a 200 ms Accessibility timeout — a wedged app
+  must cost us the *field*, never the beginning of the recording.
+- **App switches update the app-level answer only.** Polling the focused
+  element continuously would be a cross-process round-trip several times a
+  second to keep a label current. Activating OpenFlow itself is ignored, because
+  our own window is where the user goes to correct the tone they just got.
 
 ### 4.5 Spoken quotes
 
@@ -1061,11 +1113,10 @@ fixed-height container. Reveal, never insert.
   jargon, which is the highest-leverage quality control the user has. Seed it
   from terms they correct by hand; offer to import Contacts only as an explicit
   opt-in, since that is address-book data leaving its app.
-- **Per-app tone defaults fall out for free.** The client already reports the
-  foreground app for `ctx`, so Messages can default to casual and Mail to
-  formal, with the modifier overriding per utterance. Worth doing once the
-  modifier path works — it's the difference between a setting and something
-  that just behaves correctly.
+- **Per-app tone defaults** ✅ built (§4.4.1). Messages defaults to casual, Mail
+  to formal, an address bar to very casual in any browser, and picking a
+  register teaches the destination it was picked in. It was indeed the
+  difference between a setting and something that just behaves correctly.
 - Notarized build + Homebrew cask.
 
 ### 6.2 iOS

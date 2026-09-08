@@ -2,7 +2,7 @@ import Foundation
 
 /// Register for the finished text. A per-utterance choice, not a setting --
 /// you dictate a work email and a text to your partner minutes apart.
-public enum Tone: UInt32, CaseIterable, Sendable {
+public enum Tone: UInt32, CaseIterable, Codable, Sendable {
     case formal = 0
     case casual = 1
     case veryCasual = 2

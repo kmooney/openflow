@@ -41,12 +41,19 @@ private struct Header: View {
                 .tint(model.isRecording ? .red : .accentColor)
                 .disabled(isThinking)
 
-                Picker("", selection: $model.tone) {
+                // Not bound straight to `model.tone`: picking is the teaching
+                // signal, and it has to register even when you pick the tone
+                // that is already showing -- that is how you confirm a
+                // suggestion and pin it for this app.
+                Picker("", selection: Binding(get: { model.tone },
+                                              set: { model.chooseTone($0) })) {
                     ForEach(Tone.allCases, id: \.self) { Text($0.name).tag($0) }
                 }
                 .pickerStyle(.segmented)
                 .frame(width: 260)
                 .labelsHidden()
+
+                RememberedTonesButton(model: model)
 
                 Spacer()
 
@@ -55,6 +62,30 @@ private struct Header: View {
                     .foregroundStyle(model.isRecording ? .red : .secondary)
                     .animation(.default, value: model.status)
             }
+
+            HStack(spacing: 6) {
+                Image(systemName: model.toneIsRemembered ? "pin.fill" : "sparkles")
+                    .font(.system(size: 9))
+                    .foregroundStyle(model.toneIsRemembered ? Color.accentColor : Color.secondary.opacity(0.6))
+                Text(model.toneExplanation)
+                    .font(.system(size: 11))
+                    .foregroundStyle(model.toneIsRemembered ? .secondary : .tertiary)
+                    .lineLimit(1)
+                if model.toneIsRemembered {
+                    Button("Forget") { model.forgetTone() }
+                        .buttonStyle(.link)
+                        .font(.system(size: 11))
+                } else if model.context.bundleID != nil {
+                    // A segmented picker does not fire when you tap the segment
+                    // that is already selected, so confirming a suggestion --
+                    // "yes, casual, keep it" -- needs a control of its own.
+                    Button("Pin to \(model.context.label)") { model.chooseTone(model.tone) }
+                        .buttonStyle(.link)
+                        .font(.system(size: 11))
+                }
+                Spacer()
+            }
+            .padding(.top, -6)
 
             if !model.hotkeyReady {
                 HStack(spacing: 8) {
@@ -93,6 +124,97 @@ private struct Header: View {
         if model.isRecording { return String(format: "● %.1fs", model.elapsed) }
         if isThinking { return "transcribing…" }
         return model.status
+    }
+}
+
+/// The memory, made visible. Something that changes tone behind your back has
+/// to be inspectable, or the first time it guesses wrong it reads as a bug --
+/// so every rule is listed, editable in place, and removable.
+private struct RememberedTonesButton: View {
+    @ObservedObject var model: AppModel
+    @State private var showing = false
+
+    var body: some View {
+        Button {
+            showing.toggle()
+        } label: {
+            Image(systemName: "list.bullet.rectangle")
+        }
+        .buttonStyle(.borderless)
+        .help("Tones remembered per app and field")
+        .popover(isPresented: $showing, arrowEdge: .bottom) {
+            RememberedTones(model: model)
+        }
+    }
+}
+
+private struct RememberedTones: View {
+    @ObservedObject var model: AppModel
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 0) {
+            Text("Remembered tones")
+                .font(.system(size: 12, weight: .semibold))
+                .padding(.horizontal, 14).padding(.top, 12).padding(.bottom, 2)
+            Text("Set by picking a tone while that app has focus.")
+                .font(.system(size: 10)).foregroundStyle(.secondary)
+                .padding(.horizontal, 14).padding(.bottom, 8)
+            Divider()
+
+            if model.rememberedTones.isEmpty {
+                Text("Nothing yet — OpenFlow is using its suggestions.")
+                    .font(.system(size: 11)).foregroundStyle(.secondary)
+                    .padding(14)
+            } else {
+                ScrollView {
+                    VStack(spacing: 0) {
+                        ForEach(model.rememberedTones) { rule in
+                            RememberedRow(model: model, rule: rule)
+                            Divider().opacity(0.4)
+                        }
+                    }
+                }
+                .frame(maxHeight: 260)
+                Divider()
+                HStack {
+                    Spacer()
+                    Button("Forget All", role: .destructive) { model.forgetAllTones() }
+                        .controlSize(.small)
+                }
+                .padding(.horizontal, 14).padding(.vertical, 8)
+            }
+        }
+        .frame(width: 360)
+        // The list is a snapshot of a plain dictionary, so redraw it whenever
+        // the memory changes rather than making every rule observable.
+        .id(model.memoryRevision)
+    }
+}
+
+private struct RememberedRow: View {
+    @ObservedObject var model: AppModel
+    let rule: ToneRule
+
+    var body: some View {
+        HStack(spacing: 8) {
+            Text(rule.label)
+                .font(.system(size: 11))
+                .lineLimit(1).truncationMode(.middle)
+            Spacer(minLength: 8)
+            Picker("", selection: Binding(get: { rule.tone },
+                                          set: { model.remember($0, forKey: rule.key) })) {
+                ForEach(Tone.allCases, id: \.self) { Text($0.name).tag($0) }
+            }
+            .labelsHidden()
+            .frame(width: 118)
+            .controlSize(.small)
+            Button { model.forgetTone(rule.key) } label: {
+                Image(systemName: "trash")
+            }
+            .buttonStyle(.borderless)
+            .help("Forget this one")
+        }
+        .padding(.horizontal, 14).padding(.vertical, 6)
     }
 }
 
