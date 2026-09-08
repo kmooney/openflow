@@ -3,7 +3,7 @@ import AppKit
 import OpenFlowKit
 
 enum PreferencesTab: Hashable {
-    case general, model
+    case general, vocabulary, model
 }
 
 struct PreferencesWindow: View {
@@ -15,6 +15,9 @@ struct PreferencesWindow: View {
             GeneralPane(model: model)
                 .tabItem { Label("General", systemImage: "keyboard") }
                 .tag(PreferencesTab.general)
+            VocabularyPane(model: model)
+                .tabItem { Label("Vocabulary", systemImage: "text.book.closed") }
+                .tag(PreferencesTab.vocabulary)
             ModelPane(model: model)
                 .tabItem { Label("Model", systemImage: "waveform") }
                 .tag(PreferencesTab.model)
@@ -177,6 +180,92 @@ private final class ChordRecorder: ObservableObject {
         let commit = onCommit
         stop()
         commit?(candidate)
+    }
+}
+
+// MARK: - vocabulary
+
+/// Words whisper is biased toward, and which app each list belongs to.
+///
+/// The editing surface is the file itself -- a plain list is faster to edit in
+/// a text editor than through any table this could offer. What the pane must
+/// provide is the one thing the file cannot: the bundle id of the app you were
+/// just dictating into, since that is what a `[section]` header needs and
+/// there is no way to guess it.
+private struct VocabularyPane: View {
+    @ObservedObject var model: AppModel
+
+    var body: some View {
+        Form {
+            Section("In effect right now") {
+                LabeledContent("Destination") {
+                    VStack(alignment: .leading, spacing: 4) {
+                        Text(model.context.appName ?? model.context.bundleID ?? "nothing yet")
+                            .font(.system(size: 12, weight: .medium))
+                        if let id = model.context.bundleID {
+                            HStack(spacing: 6) {
+                                Text(id)
+                                    .font(.system(size: 10, design: .monospaced))
+                                    .textSelection(.enabled)
+                                    .foregroundStyle(.secondary)
+                                Button {
+                                    model.copy("[\(id)]")
+                                } label: {
+                                    Image(systemName: "doc.on.doc").font(.system(size: 9))
+                                }
+                                .buttonStyle(.borderless)
+                                .help("Copy as a section header, ready to paste into the file")
+                            }
+                        } else {
+                            Text("Dictate somewhere and its id appears here.")
+                                .font(.system(size: 10)).foregroundStyle(.secondary)
+                        }
+                    }
+                }
+
+                LabeledContent("Terms") {
+                    VStack(alignment: .leading, spacing: 4) {
+                        Text(summary).font(.system(size: 11))
+                        if !model.vocabularyHere.isEmpty {
+                            Text(model.vocabularyHere.prefix(12).joined(separator: ", ")
+                                 + (model.vocabularyHere.count > 12 ? "…" : ""))
+                                .font(.system(size: 10)).foregroundStyle(.secondary)
+                                .fixedSize(horizontal: false, vertical: true)
+                        }
+                    }
+                }
+            }
+
+            Section {
+                Text("Terms above any [section] apply everywhere. A [bundle.id] header "
+                     + "starts a list used only while that app has focus — which is how "
+                     + "you get “git status” in a terminal instead of “get status”. "
+                     + "App terms come first, so they survive the token cap.")
+                    .font(.system(size: 10)).foregroundStyle(.secondary)
+                    .fixedSize(horizontal: false, vertical: true)
+
+                if !model.vocabulary.apps.isEmpty {
+                    LabeledContent("Apps with their own list") {
+                        Text(model.vocabulary.apps.joined(separator: "\n"))
+                            .font(.system(size: 10, design: .monospaced))
+                            .foregroundStyle(.secondary)
+                    }
+                }
+
+                Button("Edit Vocabulary…") { model.onEditVocabulary?() }
+            }
+        }
+        .formStyle(.grouped)
+        .frame(height: 400)
+    }
+
+    private var summary: String {
+        let here = model.vocabularyHere.count
+        let specific = here - model.vocabulary.global.count
+        guard model.context.bundleID != nil, specific > 0 else {
+            return "\(here) term\(here == 1 ? "" : "s"), all global"
+        }
+        return "\(here) terms — \(specific) for this app, \(model.vocabulary.global.count) global"
     }
 }
 

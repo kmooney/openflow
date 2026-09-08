@@ -61,6 +61,13 @@ final class AppModel: ObservableObject {
     var onChordChanged: ((ModifierChord) -> Void)?
     /// Set by the delegate, which owns the preferences window.
     var onShowPreferences: ((PreferencesTab) -> Void)?
+    /// Opens vocab.txt in the user's editor. Owned by the delegate, which knows
+    /// where the support directory is.
+    var onEditVocabulary: (() -> Void)?
+
+    /// The whole word list, split by where each term applies. The engine only
+    /// ever sees the slice for the current destination.
+    @Published private(set) var vocabulary: VocabularyBook = .empty
 
     let engine: DictationEngine
     let memory: ToneMemory
@@ -207,6 +214,9 @@ final class AppModel: ObservableObject {
         let resolved = memory.resolve(context)
         toneSource = resolved.source
         tone = resolved.tone
+        // The prompt is rebuilt and resent on every transcription, so this is
+        // just a list swap -- no reload, nothing to invalidate.
+        engine.vocabulary = vocabulary.terms(for: context)
     }
 
     /// The user picked a register. That is the whole teaching signal: it means
@@ -336,6 +346,15 @@ final class AppModel: ObservableObject {
     }
 
     func reloadVocabulary(from url: URL) {
-        engine.vocabulary = Vocabulary.load(from: url)
+        vocabulary = VocabularyBook.load(from: url)
+        engine.vocabulary = vocabulary.terms(for: context)
+        let here = vocabulary.terms(for: context).count
+        status = context.bundleID == nil
+            ? "\(vocabulary.global.count) vocabulary terms"
+            : "\(here) vocabulary terms for \(context.label)"
+        clearStatusSoon()
     }
+
+    /// What the next utterance will be biased toward, for the settings pane.
+    var vocabularyHere: [String] { vocabulary.terms(for: context) }
 }

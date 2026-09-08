@@ -34,16 +34,17 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         let models = ModelStore(directory: dir.appendingPathComponent("models"),
                                 defaultID: "small.en")
         let engine = DictationEngine(modelPath: models.activeURL?.path ?? "", store: store)
-        engine.vocabulary = Vocabulary.load(from: dir.appendingPathComponent("vocab.txt"))
         engine.supportDirectory = dir
         engine.warmUp()
         models.onSelectionChanged = { [weak engine] url in engine?.useModel(at: url.path) }
 
         model = AppModel(engine: engine, store: store, models: models)
+        model.reloadVocabulary(from: dir.appendingPathComponent("vocab.txt"))
         model.onRequestAccessibility = { [weak self] in self?.openAccessibilitySettings() }
         windowController = MainWindowController(model: model)
         preferences = PreferencesWindowController(model: model)
         model.onShowPreferences = { [weak self] tab in self?.preferences.show(tab) }
+        model.onEditVocabulary = { [weak self] in self?.openVocab() }
 
         // Menu bar mirrors the model rather than keeping its own copy.
         model.$state.sink { [weak self] in self?.render($0) }.store(in: &bag)
@@ -274,7 +275,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
     @objc private func openPreferences() { model.showPreferences(.general) }
 
-    @objc private func openVocab() {
+    @objc func openVocab() {
         let url = Self.supportDir.appendingPathComponent("vocab.txt")
         if !FileManager.default.fileExists(atPath: url.path) {
             try? """
@@ -282,6 +283,16 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             # One per line. Lines starting with # are ignored.
             # Whisper's prompt caps around 224 tokens, so keep the most-used first.
 
+            # Terms above any [section] apply everywhere. A [bundle.id] header
+            # starts a list used only while that app has focus -- which is how
+            # you get "git status" in a terminal instead of "get status".
+            # OpenFlow shows the bundle id of the app you last dictated into in
+            # Settings > Vocabulary.
+
+            # [com.apple.Terminal]
+            # git status
+            # kubectl
+            # ssh
             """.write(to: url, atomically: true, encoding: .utf8)
         }
         NSWorkspace.shared.open(url)

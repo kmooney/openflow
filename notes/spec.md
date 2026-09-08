@@ -14,6 +14,9 @@ Status: draft for review. Nothing built yet.
   parameter — built and measured in M0
 - v0.9: **vocabulary biasing** for proper nouns (measured, §5.2), spoken
   **quote-unquote** (§4.5), signature handling (§4.4)
+- v3.0: **the vocabulary prompt is indexed per app** (§5.2.1) — a `[bundle.id]`
+  section biases decoding only in that app, so a terminal gets "git status"
+  rather than "get status"
 - v2.9: **a settings window** — the push-to-talk chord is configurable (⌃⌥
   stays the default), and the model picker and audio toggles move into it
 - v2.8: the **macOS client downloads and switches models** like iOS does
@@ -796,6 +799,42 @@ which is a decent test of whether the contract is any good.)*
 
 ---
 
+### 5.2.1 The prompt is per-app, because it is resent every time
+
+`whisper_full` is one-shot: the initial prompt is rebuilt and passed on every
+transcription, and nothing is carried between calls. So varying the list by
+destination costs nothing beyond the tokens themselves — there is no reload, no
+cached state, nothing to invalidate. That is what makes per-app biasing cheap
+enough to be the default rather than a feature.
+
+It is also the only layer where the problem *can* be solved. "get status" →
+"git status" is word substitution, which the guardrail exists to forbid (§5.2);
+the same argument that puts proper nouns at transcription time puts shell
+commands there too.
+
+One file with sections, not a file per app — the vocabulary is edited by hand,
+and scattering it across a directory makes "what have I taught it?"
+unanswerable at a glance:
+
+```
+Anthropic                 # before any section: applies everywhere
+Siobhan
+
+[com.apple.Terminal]      # only while Terminal has focus
+git status
+kubectl
+```
+
+Terms for the app come **first** in the merged list. The 224-token cap
+truncates from the tail, so ordering is what decides which terms survive a full
+prompt, and the ones chosen for this app are the ones that must. Duplicates are
+spent once, case-insensitively.
+
+The list is resolved where tone is (§4.4.1) — on focus change, from the same
+`DictationContext`. An empty `[]` header is treated as a typo and falls back to
+global, because silently swallowing every term after it would be a bad way to
+learn you mistyped a bundle id.
+
 ## 6. Clients
 
 Shared: hold-to-talk hotkey, visible recording indicator, insert on release,
@@ -1113,6 +1152,9 @@ fixed-height container. Reveal, never insert.
   not a mode you have to remember to set. Three separate hotkeys are more
   discoverable but cost three bindings; a menu-bar mode picker is sticky, which
   is exactly wrong for something that changes every message.
+- **A vocabulary editor** ✅ built, and now indexed per app (§5.2.1). Settings
+  shows the bundle id of the app you last dictated into, which is the one thing
+  the file cannot tell you and a `[section]` header needs.
 - **A vocabulary editor** (§5.2) — a plain word list for names, places and
   jargon, which is the highest-leverage quality control the user has. Seed it
   from terms they correct by hand; offer to import Contacts only as an explicit

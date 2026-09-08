@@ -57,6 +57,13 @@ tabs:
   when you let go. Two modifiers minimum, since one would fire every time you
   reach for an ordinary shortcut. ⌃⌥ remains the default, and there is a reset
   link back to it.
+- **Vocabulary** — the words whisper is biased toward, and which app each
+  list belongs to. Terms above any `[section]` apply everywhere; a
+  `[bundle.id]` header starts a list used only while that app has focus, which
+  is how you get "git status" in a terminal instead of "get status". The pane
+  shows the bundle id of the app you last dictated into and copies it as a
+  ready-to-paste header — that is the one thing the file itself cannot tell
+  you. App terms come first, so they survive whisper's ~224-token prompt cap.
 - **Model** — downloads, switches between and removes local Whisper models.
   Base is fastest, Small is the desktop default, Large v3 Turbo is the most
   accurate and the slowest to start. Everything runs on this Mac.
