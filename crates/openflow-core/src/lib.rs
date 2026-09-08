@@ -33,7 +33,9 @@ pub struct Config {
 impl Default for Config {
     fn default() -> Self {
         Config {
-            fillers: vec!["uh", "um", "uhm", "erm", "er", "mm", "mmm", "hmm", "uhh", "umm"],
+            fillers: vec![
+                "uh", "um", "uhm", "erm", "er", "mm", "mmm", "hmm", "uhh", "umm",
+            ],
             phrase_fillers: vec![],
             structure_commands: true,
             punctuation_commands: false,
@@ -180,7 +182,10 @@ fn strip_fillers(s: &str, fillers: &[&str]) -> String {
 fn collapse_stutters(s: &str) -> String {
     // Per line: `split_whitespace` would otherwise eat the newlines that the
     // structure commands just inserted.
-    s.split('\n').map(collapse_stutters_line).collect::<Vec<_>>().join("\n")
+    s.split('\n')
+        .map(collapse_stutters_line)
+        .collect::<Vec<_>>()
+        .join("\n")
 }
 
 fn collapse_stutters_line(s: &str) -> String {
@@ -223,16 +228,24 @@ fn tidy(s: &str) -> String {
         t = t.replace(&format!(" {}", p), p);
     }
     // duplicated terminals left behind by filler removal
-    while t.contains(". .") { t = t.replace(". .", "."); }
-    while t.contains("..") && !t.contains("...") { t = t.replace("..", "."); }
-    while t.contains(",,") { t = t.replace(",,", ","); }
+    while t.contains(". .") {
+        t = t.replace(". .", ".");
+    }
+    while t.contains("..") && !t.contains("...") {
+        t = t.replace("..", ".");
+    }
+    while t.contains(",,") {
+        t = t.replace(",,", ",");
+    }
     // collapse runs of spaces without touching newlines
     let mut lines: Vec<String> = Vec::new();
     for line in t.split('\n') {
         lines.push(line.split_whitespace().collect::<Vec<_>>().join(" "));
     }
     t = lines.join("\n");
-    while t.contains("\n\n\n") { t = t.replace("\n\n\n", "\n\n"); }
+    while t.contains("\n\n\n") {
+        t = t.replace("\n\n\n", "\n\n");
+    }
     t = t.trim().to_string();
     // A command phrase sitting between two sentences ("...node. New paragraph.
     // Let's...") leaves its trailing punctuation stranded at the start of the
@@ -299,8 +312,14 @@ pub fn normalize(s: &str, cfg: &Config) -> Vec<String> {
     if cfg.quote_commands {
         // Quoting deletes the marker words on purpose, so they must vanish
         // from both sides -- same enumerable hole as the structure commands.
-        for p in ["quote unquote", "open quote", "close quote", "end quote",
-                  "quote", "unquote"] {
+        for p in [
+            "quote unquote",
+            "open quote",
+            "close quote",
+            "end quote",
+            "quote",
+            "unquote",
+        ] {
             t = remove_phrase(&t, p);
         }
     }
@@ -312,7 +331,10 @@ pub fn normalize(s: &str, cfg: &Config) -> Vec<String> {
     let mut lines: Vec<String> = Vec::new();
     for line in t.split('\n') {
         let l = line.trim_start();
-        let l = l.strip_prefix("- ").or_else(|| l.strip_prefix("* ")).unwrap_or(l);
+        let l = l
+            .strip_prefix("- ")
+            .or_else(|| l.strip_prefix("* "))
+            .unwrap_or(l);
         let l = keep_leading_number(l);
         lines.push(l);
     }
@@ -361,24 +383,57 @@ fn keep_leading_number(l: &str) -> String {
 }
 
 const ORDINALS: &[(&str, u64)] = &[
-    ("first", 1), ("second", 2), ("third", 3), ("fourth", 4), ("fifth", 5),
-    ("sixth", 6), ("seventh", 7), ("eighth", 8), ("ninth", 9), ("tenth", 10),
+    ("first", 1),
+    ("second", 2),
+    ("third", 3),
+    ("fourth", 4),
+    ("fifth", 5),
+    ("sixth", 6),
+    ("seventh", 7),
+    ("eighth", 8),
+    ("ninth", 9),
+    ("tenth", 10),
 ];
 
 const UNITS: &[(&str, u64)] = &[
-    ("zero", 0), ("one", 1), ("two", 2), ("three", 3), ("four", 4), ("five", 5),
-    ("six", 6), ("seven", 7), ("eight", 8), ("nine", 9), ("ten", 10),
-    ("eleven", 11), ("twelve", 12), ("thirteen", 13), ("fourteen", 14),
-    ("fifteen", 15), ("sixteen", 16), ("seventeen", 17), ("eighteen", 18),
+    ("zero", 0),
+    ("one", 1),
+    ("two", 2),
+    ("three", 3),
+    ("four", 4),
+    ("five", 5),
+    ("six", 6),
+    ("seven", 7),
+    ("eight", 8),
+    ("nine", 9),
+    ("ten", 10),
+    ("eleven", 11),
+    ("twelve", 12),
+    ("thirteen", 13),
+    ("fourteen", 14),
+    ("fifteen", 15),
+    ("sixteen", 16),
+    ("seventeen", 17),
+    ("eighteen", 18),
     ("nineteen", 19),
 ];
 const TENS: &[(&str, u64)] = &[
-    ("twenty", 20), ("thirty", 30), ("forty", 40), ("fifty", 50),
-    ("sixty", 60), ("seventy", 70), ("eighty", 80), ("ninety", 90),
+    ("twenty", 20),
+    ("thirty", 30),
+    ("forty", 40),
+    ("fifty", 50),
+    ("sixty", 60),
+    ("seventy", 70),
+    ("eighty", 80),
+    ("ninety", 90),
 ];
 
 fn word_val(w: &str) -> Option<u64> {
-    UNITS.iter().chain(TENS.iter()).find(|(k, _)| *k == w).map(|(_, v)| *v)
+    UNITS
+        .iter()
+        .chain(TENS.iter())
+        .find(|(k, _)| *k == w)
+        .map(|(_, v)| *v)
 }
 
 fn ordinal_val(w: &str) -> Option<u64> {
@@ -422,7 +477,10 @@ fn canonicalize_numbers(toks: &[String]) -> Vec<String> {
                         let mut k = j + 1;
                         if TENS.iter().any(|(kk, _)| *kk == toks[j]) && k < toks.len() {
                             if let Some(u2) = word_val(&toks[k]) {
-                                if u2 < 10 { extra += u2; k += 1; }
+                                if u2 < 10 {
+                                    extra += u2;
+                                    k += 1;
+                                }
                             }
                         }
                         val += extra;
@@ -446,7 +504,10 @@ fn canonicalize_numbers(toks: &[String]) -> Vec<String> {
 pub enum Verdict {
     Pass,
     /// Words the stage dropped, and words it invented.
-    Fail { dropped: Vec<String>, added: Vec<String> },
+    Fail {
+        dropped: Vec<String>,
+        added: Vec<String>,
+    },
 }
 
 /// The whole guardrail: exact equality of canonical forms. Runs per stage.
@@ -469,7 +530,9 @@ pub fn check(stage_input: &str, stage_output: &str, cfg: &Config) -> Verdict {
     let mut bb = b.clone();
     for w in &a {
         match bb.iter().position(|x| x == w) {
-            Some(p) => { bb.remove(p); }
+            Some(p) => {
+                bb.remove(p);
+            }
             None => dropped.push(w.clone()),
         }
     }
@@ -477,7 +540,9 @@ pub fn check(stage_input: &str, stage_output: &str, cfg: &Config) -> Verdict {
     let mut aa = a.clone();
     for w in &b {
         match aa.iter().position(|x| x == w) {
-            Some(p) => { aa.remove(p); }
+            Some(p) => {
+                aa.remove(p);
+            }
             None => added.push(w.clone()),
         }
     }
@@ -495,7 +560,6 @@ where
         fail => (input.to_string(), fail),
     }
 }
-
 
 // ------------------------------------------------------------------ tone
 
@@ -517,7 +581,7 @@ pub enum Tone {
 
 impl Tone {
     pub fn parse(s: &str) -> Option<Tone> {
-        match s.to_lowercase().replace(['-', '_'], "") .as_str() {
+        match s.to_lowercase().replace(['-', '_'], "").as_str() {
             "formal" => Some(Tone::Formal),
             "casual" => Some(Tone::Casual),
             "verycasual" | "vcasual" => Some(Tone::VeryCasual),
@@ -525,8 +589,11 @@ impl Tone {
         }
     }
     pub fn name(&self) -> &'static str {
-        match self { Tone::Formal => "formal", Tone::Casual => "casual",
-                     Tone::VeryCasual => "very casual" }
+        match self {
+            Tone::Formal => "formal",
+            Tone::Casual => "casual",
+            Tone::VeryCasual => "very casual",
+        }
     }
 }
 
@@ -534,55 +601,12 @@ pub fn apply_tone(s: &str, tone: Tone) -> String {
     if tone == Tone::Formal {
         return s.to_string();
     }
-    // A sentence-ending period becomes a line break, the way people actually
-    // text -- dropping it outright ("Running late Be there in ten") is not
-    // "less punctuation", it's unreadable.
     let mut out = String::with_capacity(s.len());
     let chars: Vec<char> = s.chars().collect();
     let mut i = 0;
     while i < chars.len() {
         let c = chars[i];
-        if c == '.' {
-            // A list marker ("1.") opens a line and is not a sentence
-            // boundary -- splitting it strands the number on its own line.
-            let line_so_far: &str = match out.rfind('\n') {
-                Some(p) => &out[p + 1..],
-                None => &out[..],
-            };
-            if !line_so_far.is_empty() && line_so_far.chars().all(|c| c.is_ascii_digit()) {
-                out.push(c);
-                i += 1;
-                continue;
-            }
-            // don't split decimals or abbreviations: need whitespace after
-            // and an alphanumeric before.
-            let prev_ok = out.chars().last().map(|p| p.is_alphanumeric()).unwrap_or(false);
-            let mut j = i + 1;
-            let mut saw_space = false;
-            let mut newlines = 0;
-            while j < chars.len() && (chars[j] == ' ' || chars[j] == '\n') {
-                if chars[j] == '\n' { newlines += 1; }
-                j += 1;
-                saw_space = true;
-            }
-            let trailing = j >= chars.len();
-            // A sentence boundary always has whitespace (or end of text) after
-            // it. Without that check "2.15" splits into "2\n15". Abbreviations
-            // ("Dr. Smith") do have the space and will still split -- accepted
-            // limitation, and rare in dictated speech.
-            if prev_ok && (trailing || (saw_space && chars[j].is_alphanumeric())) {
-                if !trailing {
-                    // If a break is already there (a "new paragraph" command),
-                    // keep it as-is; only drop the now-redundant period.
-                    for _ in 0..newlines.max(1) {
-                        out.push('\n');
-                    }
-                }
-                i = j;
-                continue;
-            }
-        }
-        if c == ',' && tone == Tone::VeryCasual {
+        if c == '.' && (i == chars.len() - 1 || chars[i + 1] == '\n') {
             i += 1;
             continue;
         }
@@ -595,7 +619,9 @@ pub fn apply_tone(s: &str, tone: Tone) -> String {
         .map(|l| l.split_whitespace().collect::<Vec<_>>().join(" "))
         .collect::<Vec<_>>()
         .join("\n");
-    while t.contains("\n\n\n") { t = t.replace("\n\n\n", "\n\n"); }
+    while t.contains("\n\n\n") {
+        t = t.replace("\n\n\n", "\n\n");
+    }
     t = t.trim().to_string();
 
     if tone == Tone::VeryCasual {
@@ -604,16 +630,31 @@ pub fn apply_tone(s: &str, tone: Tone) -> String {
     t
 }
 
-
 // ------------------------------------------------------------- signature
 
 /// Sign-off phrases, longest first so "thank you" wins over "thanks".
 const SIGNOFFS: &[&str] = &[
-    "thanks so much", "thank you so much", "many thanks", "all the best",
-    "best regards", "kind regards", "warm regards", "best wishes",
-    "yours truly", "talk soon", "take care", "thank you", "thanks",
-    "sincerely", "regards", "cheers", "warmly", "respectfully", "best",
-    "love", "yours",
+    "thanks so much",
+    "thank you so much",
+    "many thanks",
+    "all the best",
+    "best regards",
+    "kind regards",
+    "warm regards",
+    "best wishes",
+    "yours truly",
+    "talk soon",
+    "take care",
+    "thank you",
+    "thanks",
+    "sincerely",
+    "regards",
+    "cheers",
+    "warmly",
+    "respectfully",
+    "best",
+    "love",
+    "yours",
 ];
 
 /// Split a trailing sign-off ("...done. Thanks, Kevin") off the end.
@@ -627,7 +668,9 @@ pub fn split_signature(s: &str) -> (String, Option<(String, String)>) {
         return (s.to_string(), None);
     }
     let bare = |t: &str| -> String {
-        t.chars().filter(|c| c.is_alphanumeric() || *c == '\'').collect()
+        t.chars()
+            .filter(|c| c.is_alphanumeric() || *c == '\'')
+            .collect()
     };
     let capitalized = |t: &str| -> bool {
         let b = bare(t);
@@ -640,7 +683,10 @@ pub fn split_signature(s: &str) -> (String, Option<(String, String)>) {
             continue;
         }
         let name_start = toks.len() - name_len;
-        if !toks[name_start..].iter().all(|t| capitalized(t) && bare(t).chars().all(|c| c.is_alphabetic())) {
+        if !toks[name_start..]
+            .iter()
+            .all(|t| capitalized(t) && bare(t).chars().all(|c| c.is_alphabetic()))
+        {
             continue;
         }
         for phrase in SIGNOFFS {
@@ -649,7 +695,10 @@ pub fn split_signature(s: &str) -> (String, Option<(String, String)>) {
                 continue;
             }
             let start = name_start - words.len();
-            let got: Vec<String> = toks[start..name_start].iter().map(|t| bare(t).to_lowercase()).collect();
+            let got: Vec<String> = toks[start..name_start]
+                .iter()
+                .map(|t| bare(t).to_lowercase())
+                .collect();
             if got != words {
                 continue;
             }
@@ -705,22 +754,92 @@ pub fn apply_tone_with_signature(s: &str, tone: Tone) -> String {
     }
 }
 
-
 // ---------------------------------------------------------------- quoting
 
 /// Words that end a noun phrase. Used to guess the span of a spoken
 /// "quote-unquote" when only the opening marker was said.
 const NP_STOP: &[&str] = &[
-    "is", "are", "was", "were", "be", "been", "being", "am",
-    "said", "says", "say", "will", "would", "can", "could", "should",
-    "has", "have", "had", "do", "does", "did", "get", "got", "make", "made",
-    "and", "or", "but", "that", "which", "who", "whom", "when", "where",
-    "to", "of", "in", "on", "at", "for", "with", "from", "by", "as",
-    "if", "then", "so", "because", "than", "into", "about", "over",
-    "according", "regarding", "including", "before", "after", "during",
-    "since", "until", "while", "though", "although", "unless", "without",
-    "within", "upon", "per", "versus", "near", "above", "below", "under",
-    "between", "among", "through", "across", "against", "toward", "towards",
+    "is",
+    "are",
+    "was",
+    "were",
+    "be",
+    "been",
+    "being",
+    "am",
+    "said",
+    "says",
+    "say",
+    "will",
+    "would",
+    "can",
+    "could",
+    "should",
+    "has",
+    "have",
+    "had",
+    "do",
+    "does",
+    "did",
+    "get",
+    "got",
+    "make",
+    "made",
+    "and",
+    "or",
+    "but",
+    "that",
+    "which",
+    "who",
+    "whom",
+    "when",
+    "where",
+    "to",
+    "of",
+    "in",
+    "on",
+    "at",
+    "for",
+    "with",
+    "from",
+    "by",
+    "as",
+    "if",
+    "then",
+    "so",
+    "because",
+    "than",
+    "into",
+    "about",
+    "over",
+    "according",
+    "regarding",
+    "including",
+    "before",
+    "after",
+    "during",
+    "since",
+    "until",
+    "while",
+    "though",
+    "although",
+    "unless",
+    "without",
+    "within",
+    "upon",
+    "per",
+    "versus",
+    "near",
+    "above",
+    "below",
+    "under",
+    "between",
+    "among",
+    "through",
+    "across",
+    "against",
+    "toward",
+    "towards",
 ];
 
 // NOTE: this list will never be complete -- span detection from a single
@@ -739,7 +858,8 @@ fn has_closer_ahead(toks: &[String], from: usize) -> bool {
         if CLOSERS.contains(&b.as_str()) {
             return true;
         }
-        if (b == "end" || b == "close") && j + 1 < toks.len() && bare_lower(&toks[j + 1]) == "quote" {
+        if (b == "end" || b == "close") && j + 1 < toks.len() && bare_lower(&toks[j + 1]) == "quote"
+        {
             return true;
         }
         if toks[j].ends_with(['.', '?', '!']) {
@@ -750,7 +870,10 @@ fn has_closer_ahead(toks: &[String], from: usize) -> bool {
 }
 
 fn bare_lower(t: &str) -> String {
-    t.chars().filter(|c| c.is_alphanumeric()).collect::<String>().to_lowercase()
+    t.chars()
+        .filter(|c| c.is_alphanumeric())
+        .collect::<String>()
+        .to_lowercase()
 }
 
 /// Trailing punctuation on a token, e.g. "oats." -> ("oats", ".")
@@ -782,9 +905,8 @@ pub fn apply_quotes(s: &str) -> String {
         let two_word = bare == "quote"
             && i + 1 < toks.len()
             && CLOSERS.contains(&bare_lower(&toks[i + 1]).as_str());
-        let open_quote = bare == "open"
-            && i + 1 < toks.len()
-            && bare_lower(&toks[i + 1]) == "quote";
+        let open_quote =
+            bare == "open" && i + 1 < toks.len() && bare_lower(&toks[i + 1]) == "quote";
         // A bare "quote" is only a marker if a closer actually follows in the
         // same sentence -- otherwise it is the ordinary noun, as in "she gave
         // me a quote for the work".
@@ -796,7 +918,13 @@ pub fn apply_quotes(s: &str) -> String {
             continue;
         }
 
-        let marker_len = if hyphenated { 1 } else if two_word || open_quote { 2 } else { 1 };
+        let marker_len = if hyphenated {
+            1
+        } else if two_word || open_quote {
+            2
+        } else {
+            1
+        };
         let start = i + marker_len;
         if start >= toks.len() {
             out.push(toks[i].clone());
@@ -855,17 +983,29 @@ pub fn apply_quotes(s: &str) -> String {
         let mut span: Vec<String> = toks[start..span_end].to_vec();
         let last = span.len() - 1;
         let (word, punct) = split_trailing_punct(&span[last]);
-        let inner_punct = if punct.contains(['.', ',', '!', '?']) { punct.to_string() } else { String::new() };
-        let outer_punct = if inner_punct.is_empty() { punct.to_string() } else { String::new() };
+        let inner_punct = if punct.contains(['.', ',', '!', '?']) {
+            punct.to_string()
+        } else {
+            String::new()
+        };
+        let outer_punct = if inner_punct.is_empty() {
+            punct.to_string()
+        } else {
+            String::new()
+        };
         span[last] = word.to_string();
-        out.push(format!("\"{}{}\"{}", span.join(" "), inner_punct, outer_punct));
+        out.push(format!(
+            "\"{}{}\"{}",
+            span.join(" "),
+            inner_punct,
+            outer_punct
+        ));
 
         i = span_end + closer_len;
     }
 
     out.join(" ")
 }
-
 
 // -------------------------------------------------------- declared edits
 
@@ -910,8 +1050,11 @@ pub struct Policy {
 impl Default for Policy {
     fn default() -> Self {
         Policy {
-            allowed: vec![EditReason::Vocabulary, EditReason::SelfCorrection,
-                          EditReason::Structure],
+            allowed: vec![
+                EditReason::Vocabulary,
+                EditReason::SelfCorrection,
+                EditReason::Structure,
+            ],
             max_edits: 3,
             max_changed_fraction: 0.25,
             always_allow_words: 2,
@@ -922,8 +1065,12 @@ impl Default for Policy {
 impl Policy {
     /// Nothing may change. The old exact-equality contract.
     pub fn strict() -> Self {
-        Policy { allowed: vec![], max_edits: 0, max_changed_fraction: 0.0,
-                 always_allow_words: 0 }
+        Policy {
+            allowed: vec![],
+            max_edits: 0,
+            max_changed_fraction: 0.0,
+            always_allow_words: 0,
+        }
     }
 }
 
@@ -936,10 +1083,17 @@ pub enum EditVerdict {
     /// Within policy per-edit, but too much of the utterance changed. The
     /// expression of "strongly biased against": a stage gets to fix a word
     /// here or there, not to reword you.
-    OverBudget { edits: usize, changed: usize, of: usize },
+    OverBudget {
+        edits: usize,
+        changed: usize,
+        of: usize,
+    },
     /// Words changed that the stage did not declare -- the failure that
     /// matters. Declaring one edit is not a licence for others.
-    Undeclared { dropped: Vec<String>, added: Vec<String> },
+    Undeclared {
+        dropped: Vec<String>,
+        added: Vec<String>,
+    },
 }
 
 /// The guardrail, generalized: **no _undeclared_ word changes.**
@@ -961,7 +1115,6 @@ pub fn check_declared(
             return EditVerdict::Forbidden(e.reason);
         }
     }
-
 
     // Apply the declared edits to the input's canonical form, then require
     // exact equality with the output's. Anything left over is undeclared.
@@ -1008,7 +1161,11 @@ pub fn check_declared(
         let ceiling = (input_words as f32 * policy.max_changed_fraction)
             .max(policy.always_allow_words as f32);
         if declared.len() > policy.max_edits || (changed as f32) > ceiling {
-            return EditVerdict::OverBudget { edits: declared.len(), changed, of: input_words };
+            return EditVerdict::OverBudget {
+                edits: declared.len(),
+                changed,
+                of: input_words,
+            };
         }
         return EditVerdict::Pass;
     }
@@ -1017,7 +1174,9 @@ pub fn check_declared(
     let mut bb = b.clone();
     for w in &a {
         match bb.iter().position(|x| x == w) {
-            Some(p) => { bb.remove(p); }
+            Some(p) => {
+                bb.remove(p);
+            }
             None => dropped.push(w.clone()),
         }
     }
@@ -1025,13 +1184,14 @@ pub fn check_declared(
     let mut aa = a.clone();
     for w in &b {
         match aa.iter().position(|x| x == w) {
-            Some(p) => { aa.remove(p); }
+            Some(p) => {
+                aa.remove(p);
+            }
             None => added.push(w.clone()),
         }
     }
     EditVerdict::Undeclared { dropped, added }
 }
-
 
 // ------------------------------------------------------------------ lists
 
@@ -1052,7 +1212,11 @@ pub fn check_declared(
 /// be better." -- there the numbers do not open their clauses in sequence).
 pub fn apply_lists(s: &str, min_items: usize) -> String {
     if s.contains('\n') {
-        return s.split('\n').map(|l| apply_lists(l, min_items)).collect::<Vec<_>>().join("\n");
+        return s
+            .split('\n')
+            .map(|l| apply_lists(l, min_items))
+            .collect::<Vec<_>>()
+            .join("\n");
     }
     let sentences = split_sentences(s);
     if sentences.len() < min_items {
@@ -1060,7 +1224,8 @@ pub fn apply_lists(s: &str, min_items: usize) -> String {
     }
 
     // enumerator value opening each sentence, if any
-    let heads: Vec<Option<(u64, usize)>> = sentences.iter().map(|t| leading_enumerator(t)).collect();
+    let heads: Vec<Option<(u64, usize)>> =
+        sentences.iter().map(|t| leading_enumerator(t)).collect();
 
     // find the longest ascending-by-one run
     let (mut best_start, mut best_len) = (0usize, 0usize);
@@ -1104,7 +1269,10 @@ pub fn apply_lists(s: &str, min_items: usize) -> String {
             .to_string();
         out.push_str(&format!("{}. {}\n", n + 1, body));
     }
-    let tail: Vec<&str> = sentences[best_start + best_len..].iter().map(|t| t.as_str()).collect();
+    let tail: Vec<&str> = sentences[best_start + best_len..]
+        .iter()
+        .map(|t| t.as_str())
+        .collect();
     if !tail.is_empty() {
         out.push('\n');
         out.push_str(&tail.join(" "));
@@ -1121,7 +1289,10 @@ fn split_sentences(s: &str) -> Vec<String> {
         cur.push(*c);
         if matches!(c, '.' | '?' | '!') {
             let next_is_space = chars.get(i + 1).map(|n| n.is_whitespace()).unwrap_or(true);
-            let prev_alnum = chars.get(i.wrapping_sub(1)).map(|p| p.is_alphanumeric()).unwrap_or(false);
+            let prev_alnum = chars
+                .get(i.wrapping_sub(1))
+                .map(|p| p.is_alphanumeric())
+                .unwrap_or(false);
             // "1." opening a segment is a list marker, not a sentence end --
             // splitting there fragments the item away from its number.
             let marker = {
@@ -1154,7 +1325,9 @@ fn leading_enumerator(sent: &str) -> Option<(u64, usize)> {
     } else if let Some(v) = ordinal_val(&lower) {
         v
     } else if let Some(v) = word_val(&lower) {
-        if v == 0 { return None; }
+        if v == 0 {
+            return None;
+        }
         v
     } else {
         return None;
@@ -1167,7 +1340,6 @@ fn leading_enumerator(sent: &str) -> Option<(u64, usize)> {
     Some((val, skip))
 }
 
-
 // -------------------------------------------------- unordered enumerations
 
 /// Phrases that announce a list. **The cue is required**, and that is the whole
@@ -1176,28 +1348,43 @@ fn leading_enumerator(sent: &str) -> Option<(u64, usize)> {
 /// signal worth acting on. Requiring the user to say "here's my list" makes the
 /// behaviour predictable and gives them an explicit way to ask for it.
 const LIST_CUES: &[&str] = &[
-    "list", "lists", "shopping", "groceries", "grocery", "agenda", "items",
-    "ingredients", "inventory", "checklist", "todo", "errands",
+    "list",
+    "lists",
+    "shopping",
+    "groceries",
+    "grocery",
+    "agenda",
+    "items",
+    "ingredients",
+    "inventory",
+    "checklist",
+    "todo",
+    "errands",
 ];
 
 /// Cues that can open the series sentence itself: "I need milk, eggs, bread."
 const INLINE_CUES: &[&str] = &[
-    "i need", "we need", "i want", "don't forget", "dont forget",
-    "remember to get", "pick up", "we should get", "i should get",
+    "i need",
+    "we need",
+    "i want",
+    "don't forget",
+    "dont forget",
+    "remember to get",
+    "pick up",
+    "we should get",
+    "i should get",
 ];
 
 /// Finite verbs. An item containing one is a clause, not a noun phrase, which
 /// is what separates a list from a narrative ("I went to the store, bought
 /// milk, came home").
 const FINITE_VERBS: &[&str] = &[
-    "is", "are", "was", "were", "am", "be", "been", "being",
-    "go", "goes", "went", "gone", "come", "comes", "came",
-    "buy", "buys", "bought", "make", "makes", "made", "take", "takes", "took",
-    "get", "gets", "got", "put", "puts", "run", "runs", "ran",
-    "do", "does", "did", "have", "has", "had", "will", "would", "shall",
-    "can", "could", "should", "may", "might", "must",
-    "need", "needs", "want", "wants", "like", "likes", "think", "thinks",
-    "said", "says", "say", "told", "tell", "tells", "call", "called",
+    "is", "are", "was", "were", "am", "be", "been", "being", "go", "goes", "went", "gone", "come",
+    "comes", "came", "buy", "buys", "bought", "make", "makes", "made", "take", "takes", "took",
+    "get", "gets", "got", "put", "puts", "run", "runs", "ran", "do", "does", "did", "have", "has",
+    "had", "will", "would", "shall", "can", "could", "should", "may", "might", "must", "need",
+    "needs", "want", "wants", "like", "likes", "think", "thinks", "said", "says", "say", "told",
+    "tell", "tells", "call", "called",
 ];
 
 fn has_cue(sent: &str) -> bool {
@@ -1234,7 +1421,10 @@ fn comma_series(sent: &str, min_items: usize) -> Option<Vec<String>> {
     for p in &parts {
         // a clause, not an item
         if p.split_whitespace().any(|w| {
-            let b: String = w.chars().filter(|c| c.is_alphanumeric() || *c == '\'').collect();
+            let b: String = w
+                .chars()
+                .filter(|c| c.is_alphanumeric() || *c == '\'')
+                .collect();
             FINITE_VERBS.contains(&b.to_lowercase().as_str())
         }) {
             return None;
@@ -1250,7 +1440,11 @@ fn comma_series(sent: &str, min_items: usize) -> Option<Vec<String>> {
 /// Turn an announced comma series into a bulleted list.
 pub fn apply_unordered_lists(s: &str, min_items: usize) -> String {
     if s.contains('\n') {
-        return s.split('\n').map(|l| apply_unordered_lists(l, min_items)).collect::<Vec<_>>().join("\n");
+        return s
+            .split('\n')
+            .map(|l| apply_unordered_lists(l, min_items))
+            .collect::<Vec<_>>()
+            .join("\n");
     }
     let sentences = split_sentences(s);
     if sentences.is_empty() {
@@ -1266,7 +1460,14 @@ pub fn apply_unordered_lists(s: &str, min_items: usize) -> String {
         let candidate: Option<(Option<String>, Vec<String>)> = if let Some(rest) = inline {
             comma_series(rest, min_items).map(|items| {
                 let cue_len = sent.len() - rest.len();
-                (Some(sent[..cue_len].trim_end_matches([' ', ',', ':']).to_string()), items)
+                (
+                    Some(
+                        sent[..cue_len]
+                            .trim_end_matches([' ', ',', ':'])
+                            .to_string(),
+                    ),
+                    items,
+                )
             })
         } else if announced_before {
             comma_series(sent, min_items).map(|items| (None, items))
@@ -1300,21 +1501,29 @@ pub fn apply_unordered_lists(s: &str, min_items: usize) -> String {
     for (n, part) in out.iter().enumerate() {
         let is_block = part.starts_with('\n') || part.starts_with("- ");
         if n > 0 {
-            res.push_str(if is_block || res.ends_with(']') { "\n\n" } else { " " });
+            res.push_str(if is_block || res.ends_with(']') {
+                "\n\n"
+            } else {
+                " "
+            });
         }
         res.push_str(part.trim_start_matches('\n'));
     }
     res.trim().to_string()
 }
 
-
 // ------------------------------------------------------- spoken corrections
 
 /// Cues that throw away the whole preceding clause. "Let's meet at noon,
 /// scratch that, let's meet at one" -> the entire first attempt goes.
 const CLAUSE_CUES: &[&str] = &[
-    "scratch that", "strike that", "delete that", "forget that",
-    "start over", "let me start over", "let me try again",
+    "scratch that",
+    "strike that",
+    "delete that",
+    "forget that",
+    "start over",
+    "let me start over",
+    "let me try again",
 ];
 
 /// Cues that replace just the phrase before them. "Send it to Bob, I mean
@@ -1328,7 +1537,11 @@ fn is_no_run(toks: &[String], i: usize) -> Option<usize> {
     while j < toks.len() && bare_lower(&toks[j]) == "no" {
         j += 1;
     }
-    if j - i >= 2 { Some(j) } else { None }
+    if j - i >= 2 {
+        Some(j)
+    } else {
+        None
+    }
 }
 
 /// Erase a false start and everything up to the control phrase.
@@ -1368,8 +1581,10 @@ pub fn apply_corrections(s: &str) -> (String, Vec<Edit>) {
                         if i + words.len() > toks.len() {
                             continue;
                         }
-                        let got: Vec<String> =
-                            toks[i..i + words.len()].iter().map(|t| bare_lower(t)).collect();
+                        let got: Vec<String> = toks[i..i + words.len()]
+                            .iter()
+                            .map(|t| bare_lower(t))
+                            .collect();
                         if got == words {
                             end_tok = Some(i + words.len());
                             clause_scope = is_clause;
@@ -1382,7 +1597,9 @@ pub fn apply_corrections(s: &str) -> (String, Vec<Edit>) {
 
             // reach back to a boundary; if that erases nothing, go back further
             let boundary_before = |k: usize| -> Option<usize> {
-                (0..k).rev().find(|&m| toks[m].ends_with([',', '.', '!', '?', ';']))
+                (0..k)
+                    .rev()
+                    .find(|&m| toks[m].ends_with([',', '.', '!', '?', ';']))
             };
             let mut start_tok = boundary_before(i).map(|m| m + 1).unwrap_or(0);
             if start_tok >= i {
@@ -1390,7 +1607,9 @@ pub fn apply_corrections(s: &str) -> (String, Vec<Edit>) {
                 // erases nothing. What to do then depends on the cue:
                 start_tok = if clause_scope {
                     // discard the whole previous clause too
-                    boundary_before(start_tok.saturating_sub(1)).map(|m| m + 1).unwrap_or(0)
+                    boundary_before(start_tok.saturating_sub(1))
+                        .map(|m| m + 1)
+                        .unwrap_or(0)
                 } else {
                     // replace only the phrase: take the one word before the
                     // boundary. Erring toward deleting LESS -- an extra word
@@ -1419,7 +1638,11 @@ pub fn apply_corrections(s: &str) -> (String, Vec<Edit>) {
                 next.push(' ');
             }
             next.push_str(tail);
-            edits.push(Edit { from: erased, to: String::new(), reason: EditReason::SelfCorrection });
+            edits.push(Edit {
+                from: erased,
+                to: String::new(),
+                reason: EditReason::SelfCorrection,
+            });
             text = next;
             continue 'outer;
         }
@@ -1459,14 +1682,19 @@ pub fn format_with_edits(raw: &str, cfg: &Config) -> (String, Vec<Edit>) {
             let mut bb2 = b.clone();
             for w in &a {
                 match bb2.iter().position(|x| x == w) {
-                    Some(p) => { bb2.remove(p); }
+                    Some(p) => {
+                        bb2.remove(p);
+                    }
                     None => dropped.push(w.clone()),
                 }
             }
             for w in dropped {
                 if w == "and" {
-                    edits.push(Edit { from: "and".into(), to: String::new(),
-                                      reason: EditReason::Structure });
+                    edits.push(Edit {
+                        from: "and".into(),
+                        to: String::new(),
+                        reason: EditReason::Structure,
+                    });
                 }
             }
         }
@@ -1474,14 +1702,22 @@ pub fn format_with_edits(raw: &str, cfg: &Config) -> (String, Vec<Edit>) {
     (out, edits)
 }
 
-
 // ------------------------------------------------------------ salutation
 
 /// Openings that start a letter. The counterpart to SIGNOFFS.
 const GREETINGS: &[&str] = &[
-    "good morning", "good afternoon", "good evening",
-    "dear", "hello", "hey there", "hey", "hi there", "hi", "hiya",
-    "greetings", "yo",
+    "good morning",
+    "good afternoon",
+    "good evening",
+    "dear",
+    "hello",
+    "hey there",
+    "hey",
+    "hi there",
+    "hi",
+    "hiya",
+    "greetings",
+    "yo",
 ];
 
 /// Split a leading salutation ("Hi John," / "Dear Sarah,") off the front.
@@ -1495,7 +1731,9 @@ pub fn split_salutation(s: &str) -> (Option<String>, String) {
         return (None, s.to_string());
     }
     let bare = |t: &str| -> String {
-        t.chars().filter(|c| c.is_alphanumeric() || *c == '\'').collect()
+        t.chars()
+            .filter(|c| c.is_alphanumeric() || *c == '\'')
+            .collect()
     };
 
     for greet in GREETINGS {
@@ -1503,7 +1741,10 @@ pub fn split_salutation(s: &str) -> (Option<String>, String) {
         if toks.len() <= words.len() {
             continue;
         }
-        let got: Vec<String> = toks[..words.len()].iter().map(|t| bare(t).to_lowercase()).collect();
+        let got: Vec<String> = toks[..words.len()]
+            .iter()
+            .map(|t| bare(t).to_lowercase())
+            .collect();
         if got != words {
             continue;
         }
