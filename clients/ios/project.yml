@@ -88,6 +88,8 @@ targets:
           - UIInterfaceOrientationLandscapeRight
     entitlements:
       path: OpenFlow.entitlements
+      properties:
+        com.apple.security.application-groups: [group.dev.openflow]
     dependencies:
       - target: OpenFlowKit
         embed: true
@@ -130,6 +132,8 @@ targets:
             RequestsOpenAccess: true
     entitlements:
       path: Keyboard.entitlements
+      properties:
+        com.apple.security.application-groups: [group.dev.openflow]
     dependencies:
       - target: OpenFlowKit
         embed: false

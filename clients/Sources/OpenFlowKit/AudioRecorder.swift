@@ -60,11 +60,20 @@ public final class AudioRecorder {
         // and the second does not" looks like.
         rebuildEngine()
 
+        // Exclusive `.playAndRecord` in `.measurement` mode: measurement
+        // suppresses the system processing that would otherwise colour what
+        // whisper hears.
+        //
+        // This only ever runs in the foreground. iOS refuses to let a
+        // backgrounded app begin capture at all -- not the activation
+        // (OSStatus 560557684, '!int') and not the engine either (2003329396,
+        // 'what') even against a healthy active session with the microphone
+        // routed and a valid format. That measurement is why dictation starts
+        // in the app and the keyboard only ends it.
         let session = AVAudioSession.sharedInstance()
-        // .playAndRecord with .mixWithOthers so recording can continue while
-        // the user is in another app (the keyboard hand-back flow).
         try session.setCategory(.playAndRecord, mode: .measurement,
-                                options: [.duckOthers, .allowBluetooth, .defaultToSpeaker])
+                                options: [.duckOthers, .allowBluetooth,
+                                          .defaultToSpeaker])
         try session.setActive(true, options: [])
         #endif
 
@@ -125,6 +134,10 @@ public final class AudioRecorder {
         do {
             try engine.start()
         } catch {
+            #if os(iOS)
+            let ee = error as NSError
+            NSLog("openflow: engine.start failed %@ %ld", ee.domain, ee.code)
+            #endif
             // A CoreAudio error must never reach the user as "-10875". If the
             // graph will not start, the only configuration that has ever caused
             // it is voice processing -- drop it and try once more with a clean

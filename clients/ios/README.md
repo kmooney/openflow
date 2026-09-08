@@ -5,18 +5,21 @@ Two targets, and the split is forced by the platform rather than chosen:
 | target | what it does |
 |---|---|
 | **OpenFlow** (app) | microphone, whisper, formatting, history — everything |
-| **OpenFlowKeyboard** | a microphone *button* and a text sink |
+| **OpenFlowKeyboard** | a *Finish* key and a text sink |
 
 **A keyboard extension cannot use the microphone.** That is an Apple rule, not
 a difficulty, and extensions additionally run under a memory ceiling far below
-what a Whisper model needs. So the keyboard never records: it opens the app, the
-app transcribes, and the finished text is handed back through a shared App Group
-container.
+what a Whisper model needs. So the keyboard never records: the app does, and
+the finished text is handed back through a shared App Group container.
+
+It cannot start the app's recording either — that was measured, not assumed,
+and the evidence is below. Dictation begins in the app; the keyboard ends it
+and inserts the result.
 
 ## The handoff
 
 ```
-keyboard: mic key ──URL scheme──► app: record → transcribe → format
+app: you tap the mic → record → transcribe → format
                                         │
                                   writes pending.json to the App Group
                                         │
@@ -24,6 +27,11 @@ keyboard: mic key ──URL scheme──► app: record → transcribe → forma
                                         ▼
 keyboard: on next appearance, take() the text and insertText()
 ```
+
+**Dictation starts in the app, not from the keyboard.** That is forced by the
+platform and was measured rather than assumed — see *Why the keyboard cannot
+start dictation* below. The keyboard ends a recording that is already running
+and inserts the result; it never begins one.
 
 `take()` is one-shot — reading deletes — because inserting the same sentence
 twice into someone's message is a worse failure than missing it once. Offers
@@ -33,6 +41,41 @@ user happens to be typing later.
 Insertion happens **every time the keyboard appears**, not only on the
 notification. The normal path is the user switching back by hand, and no
 notification is delivered then.
+
+## Why the keyboard cannot start dictation
+
+A keyboard extension cannot use the microphone, which is why the app does the
+recording. The obvious repair — have the keyboard ask the app to start — does
+not work either, and the reason is worth writing down because every part of it
+looks solvable until it is tested.
+
+**The keyboard cannot open its containing app.** `extensionContext.open`
+returns false, and the undocumented responder-chain `openURL:` walk that
+several shipping keyboards rely on finds a responder, calls it, and does
+nothing. Both were measured on iOS 26.
+
+**The app cannot be driven from the background either.** It can be kept alive
+(a silent looping `AVAudioPlayer` under the `audio` background mode) and it
+does receive the Darwin notification — but it cannot then start capturing:
+
+| what was tried | result |
+|---|---|
+| `setActive(true)` from the background | OSStatus 560557684 `'!int'`, *cannot interrupt others* |
+| the same with `.mixWithOthers` | same |
+| session established in the foreground and merely *held*, recorder touching nothing | `AVAudioEngine.start()` fails, 2003329396 `'what'` |
+| the same with an exclusive (non-mixable) session | same |
+
+At the point of that last failure the session was `.playAndRecord` /
+`.measurement`, active, with `inputAvailable=1`, one routed input and a valid
+48 kHz mono format. The microphone is *there*; iOS simply will not let a
+backgrounded app begin capturing with it. An app may continue a recording it
+already had, which is not the same thing.
+
+The only design that would evade this keeps the audio graph running
+permanently so nothing ever starts in the background — at the cost of the
+microphone indicator being lit whenever the app is resident, and the app
+genuinely capturing all the time. That is not a trade worth making for a
+dictation app, so the keyboard tells the truth instead.
 
 ## The model ships in the app
 
@@ -87,16 +130,16 @@ Two things behave differently there:
    Keyboard → OpenFlow**.
 2. Tap **OpenFlow** in that list and turn on **Allow Full Access**. Without it
    the App Group container is unreachable and nothing will ever be inserted.
-3. Open Notes, tap a text field, and press 🌐 until the OpenFlow keyboard shows.
-4. Tap the microphone. The app opens and starts recording.
-5. **Switch straight back to Notes.** Recording keeps going — the app declares
-   the `audio` background mode for exactly this.
-6. Tap the keyboard's key again (it now reads **Finish**). The app transcribes
-   in the background and the text is inserted where your cursor is.
+3. Open OpenFlow and tap its microphone to start recording.
+4. **Switch to whatever you are typing into.** Recording keeps going — the app
+   declares the `audio` background mode for exactly this.
+5. Bring up the OpenFlow keyboard. Its key now reads **Finish**.
+6. Tap it. The app transcribes in the background and the text is inserted where
+   your cursor is.
 
-Step 6 is the whole point: you never have to go back to OpenFlow to end a
-recording. If you do return to the app, its own button works the same way, and
-the keyboard picks the text up whenever it next appears.
+Step 6 is the point: you never have to go *back* to OpenFlow to end a recording
+or to collect the result. Starting one is the only thing that has to happen
+there.
 
 ## Before it runs on a device
 
@@ -109,11 +152,11 @@ the keyboard picks the text up whenever it next appears.
 
 ## Known constraint
 
-Opening the app from the keyboard walks the responder chain looking for
-`openURL:`, because an extension has no `UIApplication`. Several shipping
-dictation keyboards do this, but it is not documented API and could stop
-working. The failure is visible rather than silent, and the user can always
-open the app by hand — the pending text is picked up either way.
+The keyboard's key still *attempts* both routes to open the app, because they
+cost nothing and the rule has moved between releases before. Neither is
+allowed to report success: an earlier version said "Opening OpenFlow…" the
+instant the responder chain accepted the selector, which was indistinguishable
+from success while the screen sat unchanged.
 
 ## TestFlight
 

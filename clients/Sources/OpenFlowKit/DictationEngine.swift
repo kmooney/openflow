@@ -100,13 +100,25 @@ public final class DictationEngine {
     public func drainPeakDB() -> Float { recorder.drainPeakDB() }
 
     public func begin() {
-        guard state == .idle || state == .recording else { return }
+        // `.failed` has to be startable, or one failed start is terminal:
+        // nothing ever moves the state back to `.idle`, so every later tap
+        // became a silent no-op and the microphone button looked dead with no
+        // explanation. Only `.thinking` is genuinely unsafe to interrupt --
+        // the recorder is already stopped and a transcription is in flight.
+        guard state != .thinking else { return }
         do {
             try recorder.start()
             state = .recording
             watchForDeadInput()
         } catch {
-            state = .failed(error.localizedDescription)
+            // Domain and code first. `localizedDescription` for a CoreAudio
+            // failure reads "The operation couldn't be completed. (OSStatus
+            // error -10875.)" -- the number is the only identifying part and
+            // it is at the very end, which is exactly where a status line
+            // truncates it away.
+            let e = error as NSError
+            NSLog("openflow: recorder start failed: %@ %ld", e.domain, e.code)
+            state = .failed("start failed: \(e.domain) \(e.code) — \(e.localizedDescription)")
         }
     }
 

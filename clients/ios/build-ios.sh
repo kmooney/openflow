@@ -54,6 +54,46 @@ fi
 echo "==> generating Xcode project"
 xcodegen generate --quiet
 
+# Installing on a phone is a different build from the simulator one: it has to
+# be signed, and a signed build needs a team. Everything before this point is
+# shared, so the device path only diverges here.
+if [ "${1:-}" = "--device" ]; then
+  : "${TEAM_ID:?set TEAM_ID to your 10-character Apple Developer team id (Xcode > Settings > Accounts > Manage Certificates, or the Membership page)}"
+
+  # Whichever iPhone is plugged in, unless DEVICE_UDID names one.
+  DEVJSON=$(mktemp -t openflow-devices)
+  trap 'rm -f "$DEVJSON"' EXIT
+  UDID=${DEVICE_UDID:-$(xcrun devicectl list devices -j "$DEVJSON" >/dev/null 2>&1 && python3 -c "
+import json,sys
+for d in json.load(open(sys.argv[1]))['result']['devices']:
+    if d.get('connectionProperties',{}).get('pairingState') == 'paired':
+        print(d['hardwareProperties']['udid']); raise SystemExit
+" "$DEVJSON")}
+  [ -n "$UDID" ] || { echo "no paired device found. Unlock the phone, tap Trust, and enable
+Settings > Privacy & Security > Developer Mode."; exit 1; }
+
+  echo "==> building for device $UDID"
+  xcodebuild -project OpenFlowIOS.xcodeproj -scheme OpenFlow \
+    -destination "generic/platform=iOS" \
+    -derivedDataPath build \
+    DEVELOPMENT_TEAM="$TEAM_ID" \
+    CODE_SIGN_STYLE=Automatic \
+    -allowProvisioningUpdates 2>&1 \
+    | grep -E "error:|BUILD" | head -30
+
+  APP=build/Build/Products/Debug-iphoneos/OpenFlow.app
+  [ -d "$APP" ] || { echo "build produced no app"; exit 1; }
+
+  echo "==> installing"
+  xcrun devicectl device install app --device "$UDID" "$APP"
+  echo "==> launching"
+  xcrun devicectl device process launch --device "$UDID" dev.openflow.ios
+  echo
+  echo "Installed. For the keyboard: Settings > General > Keyboard > Keyboards >"
+  echo "Add New Keyboard > OpenFlow, then tap it and turn on Allow Full Access."
+  exit 0
+fi
+
 echo "==> building"
 xcodebuild -project OpenFlowIOS.xcodeproj -scheme OpenFlow \
   -destination "generic/platform=iOS Simulator" \
@@ -87,6 +127,7 @@ fi
 echo
 echo "Open with:  open $(pwd)/OpenFlowIOS.xcodeproj"
 echo "Or run in the simulator:  ./build-ios.sh --run"
+echo "Or on a plugged-in iPhone:  TEAM_ID=ABCDE12345 ./build-ios.sh --device"
 echo
 echo "Before it will run on a device you must set your team in Xcode"
 echo "(Signing & Capabilities) for BOTH targets, and keep the App Group"
