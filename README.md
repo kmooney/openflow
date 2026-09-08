@@ -1,88 +1,89 @@
 # OpenFlow
 
-An open source, self-hostable dictation app in the spirit of Wispr Flow. Hold a
-hotkey, speak, release; cleaned-up text appears at the cursor in whatever app
-has focus. MIT licensed.
+An open source dictation app you can run yourself, along the lines of Wispr
+Flow. Hold a hotkey, speak, let go, and tidied-up text appears at the cursor in
+whatever app you are using. MIT licensed.
 
-**Inference runs on your machine.** Speech recognition is whisper.cpp, compiled
-into the client; formatting is deterministic Rust. Nothing is sent anywhere, and
-the only network traffic is downloading a model the first time. There is no
-account, no container, and no server to stand up.
+**Everything runs on your own machine.** Speech recognition is whisper.cpp,
+built into the app. The formatting is plain Rust code following fixed rules.
+Nothing you say is sent anywhere. The only time OpenFlow uses the network is to
+download a speech model the first time. There is no account and no server to set
+up.
 
 ## Status
 
-The Rust core and three clients are built. The server, and with it the
-"spin up an instance" story, is not — it is designed in `notes/spec.md` as a
-*fallback and sync point*, not something you need to dictate.
+The Rust core and all three apps work. The server does not exist yet. It is
+written up in `notes/spec.md` as an optional extra for syncing between devices,
+and you do not need it to dictate.
 
 | | what it is | state |
 |---|---|---|
-| `crates/openflow-core` | formatting rules, normalization, the edit ledger | built |
-| `crates/openflow-ffi` | C ABI over the core, for the Swift clients | built |
-| `crates/openflow-cli` | `of-fmt` — the formatter over stdin, for testing | built |
-| `clients/` macOS | menu bar app, push-to-talk, paste, history | built |
-| `clients/ios` | app + keyboard extension, on-device whisper | built |
+| `crates/openflow-core` | the formatting rules and the record of what they changed | built |
+| `crates/openflow-ffi` | lets the Swift apps call into the core | built |
+| `crates/openflow-cli` | `of-fmt`, runs the formatter on text you pipe in | built |
+| `clients/macos` | menu bar app, push-to-talk, paste, history | built |
+| `clients/ios` | app and keyboard, whisper on the phone | built |
 | `clients/windows` | tray app, push-to-talk, paste, history | built |
-| server, container, web console | paired mode, cross-device history, BYO drivers | spec only |
+| server, container, web console | syncing between devices, running your own speech or formatting services | written up only |
 
-## How a dictation goes
+## What happens when you dictate
 
 ```
-hold ⌃⌥ ──► capture ──► whisper.cpp ──► format chain ──► guardrail ──► paste
-                        (on device)     (deterministic)   (per stage)
+hold ⌃⌥ ──► record ──► whisper.cpp ──► formatting ──► check ──► paste
+                       (on your        (fixed         (every
+                        machine)        rules)         step)
 ```
 
-The formatter removes "uh" and "um", collapses stutters, turns spoken
-enumerations into numbered and bulleted lists, handles spoken quotes and
-corrections ("scratch that"), and applies punctuation and a register — formal,
-casual, or very casual — to what you said.
+The formatter drops "uh" and "um", cleans up repeated words, turns spoken lists
+into numbered or bulleted lists, handles spoken quotes and spoken fixes
+("scratch that"), and adds punctuation. You pick a tone: formal, casual, or very
+casual.
 
-**It cannot invent words.** Every change a stage makes is declared in an edit
-ledger, and the host — not the driver — checks the output against the input
-before anything reaches your cursor. A stage that changed a word it did not
-declare is skipped, and its input passes through untouched. The history window
-shows the ledger for every utterance, and *Show Original* shows exactly what you
-said before formatting.
+**It cannot make up words.** Every formatting step has to declare each change it
+makes, and the app then compares the result against what you actually said. If a
+step changed a word it did not declare, that step is thrown out and its input is
+used unchanged. The history window lists the changes for everything you dictate,
+and *Show Original* shows exactly what you said before formatting.
 
 ## Repository layout
 
 ```
 crates/
-  openflow-core/   formatting, normalization, ledger, guardrail — all the
-                   logic that has to be correct, written once
-  openflow-ffi/    C ABI consumed by macOS and iOS
+  openflow-core/   formatting, cleanup, the record of changes, and the
+                   check — all the logic that has to be right, written once
+  openflow-ffi/    the bridge the macOS and iOS apps use
   openflow-cli/    of-fmt
 clients/
-  Sources/         Swift: OpenFlowKit (shared), OpenFlowMac, OpenFlowIOS,
-                   OpenFlowKeyboard
-  ios/             Xcode project generation, build and release scripts
-  windows/         its own cargo workspace — egui, WASAPI, Win32
+  macos/           the Mac app and its build script
+  ios/             the iPhone app, its keyboard, and the Xcode setup
+  windows/         its own cargo workspace: egui, WASAPI, Win32
+  shared/          the Swift both Apple apps use, and its tests
 notes/spec.md      the design, and why each decision went the way it did
 ```
 
 ## Build
 
-**macOS** — see `clients/README.md`.
+**macOS** — see `clients/macos/README.md`.
 
 ```sh
-cd clients && ./build-macos.sh && open build/OpenFlow.app
+cd clients/macos && ./build-macos.sh && open build/OpenFlow.app
 ```
 
-Builds the Rust core, fetches and statically builds whisper.cpp, downloads
-`small.en`, and assembles the `.app`. Needs Accessibility and Microphone
-permissions to be useful.
+This builds the Rust core, fetches and builds whisper.cpp, downloads the
+`small.en` model, and puts the `.app` together. You will need to give it
+Accessibility and Microphone permission before it can do anything.
 
 **iOS** — see `clients/ios/README.md`.
 
 ```sh
-cd clients/ios && ./build-ios.sh --run     # builds, boots the simulator, runs
+cd clients/ios && ./build-ios.sh --run     # builds, starts the simulator, runs
 ```
 
-Ships `base.en` inside the bundle so it dictates on first launch with no
-network. Bigger models are downloadable in the app.
+The `base.en` model is included in the app, so it dictates the first time you
+open it with no network. You can download bigger models from inside the app.
 
-**Windows** — needs Visual Studio with the C++ workload; the script finds the
-toolchain itself.
+**Windows** — needs Visual Studio with the C++ workload. The script finds the
+tools itself.
 
 ```powershell
 cd clients\windows
@@ -90,7 +91,7 @@ cd clients\windows
 .\build-windows.ps1 -Gpu cuda       # optional, needs the CUDA SDK
 ```
 
-**The formatter alone**, no audio, no client:
+**Just the formatter**, with no audio and no app:
 
 ```sh
 $ echo "Um, one, buy milk. Two, call mom. Three, book the flight." | cargo run -q -p openflow-cli
@@ -99,24 +100,25 @@ $ echo "Um, one, buy milk. Two, call mom. Three, book the flight." | cargo run -
 $ cargo run -q -p openflow-cli -- --tone casual notes.txt
 ```
 
-JSON out: the formatted text, the tone, the ledger of what changed and why, and
-whether the guardrail passed.
+It prints JSON: the formatted text, the tone, a list of what changed and why,
+and whether the check passed.
 
 ## Tests
 
 ```sh
 cargo test                          # 60 formatting tests in the core
-swift test                          # macOS/iOS Kit: seams, not logic
+cd clients && swift test            # macOS and iOS: the joins, not the logic
 cd clients/windows && .\build-windows.ps1 -Test
 ```
 
-The Swift and Windows suites cover the platform seams — that the FFI round
-trips, that tone and the ledger survive the boundary, that vocabulary biasing
-reaches whisper, that capture and the chord behave. The formatting rules
-themselves are tested in Rust, where they live.
+The Swift and Windows tests cover the places where the platform code meets the
+Rust core: that text makes the trip across the boundary and back, that the tone
+and the list of changes survive it, that your custom words reach whisper, and
+that recording and the hotkey behave. The formatting rules themselves are tested
+in Rust, where they live.
 
 ## Privacy
 
-History is SQLite on the device. Audio is discarded after transcription unless
-you turn *Keep audio* on. Delete means delete — the row goes, the audio blob is
-unlinked, and there is no tombstone holding the text.
+History is a SQLite file on the device. Audio is thrown away after it has been
+transcribed, unless you turn *Keep audio* on. Deleting really deletes: the row
+goes, the audio file is removed, and nothing is left holding on to the text.

@@ -3,7 +3,10 @@ import PackageDescription
 
 // Static libraries produced by `cargo build --release` and the whisper.cpp
 // static build. Absolute paths keep this buildable without an Xcode project;
-// build-macos.sh regenerates them if the checkout moves.
+// macos/build-macos.sh regenerates them if the checkout moves.
+//
+// The package root sits above macos/ and shared/ because SwiftPM will not
+// take a target path outside it.
 let whisperLib = "/Users/kevin/Projects/openflow/m0/whisper.cpp/build-static"
 let rustLib = "/Users/kevin/Projects/openflow/target/release"
 
@@ -15,14 +18,15 @@ let package = Package(
         .executable(name: "OpenFlowMac", targets: ["OpenFlowMac"]),
     ],
     targets: [
-        .systemLibrary(name: "CWhisper", path: "Sources/CWhisper"),
-        .systemLibrary(name: "COpenFlow", path: "Sources/COpenFlow"),
+        .systemLibrary(name: "CWhisper", path: "shared/CWhisper"),
+        .systemLibrary(name: "COpenFlow", path: "shared/COpenFlow"),
 
         // Everything both platforms share: capture, inference, formatting,
         // history. No macOS-only API may appear here.
         .target(
             name: "OpenFlowKit",
             dependencies: ["CWhisper", "COpenFlow"],
+            path: "shared/OpenFlowKit",
             linkerSettings: [
                 .unsafeFlags([
                     "-L\(whisperLib)/src", "-L\(whisperLib)/ggml/src",
@@ -41,12 +45,17 @@ let package = Package(
             ]
         ),
 
-        .testTarget(name: "OpenFlowKitTests", dependencies: ["OpenFlowKit"]),
+        .testTarget(
+            name: "OpenFlowKitTests",
+            dependencies: ["OpenFlowKit"],
+            path: "shared/OpenFlowKitTests"
+        ),
 
         // The macOS shell: hotkey, paste, menu bar. Thin by design.
         .executableTarget(
             name: "OpenFlowMac",
             dependencies: ["OpenFlowKit"],
+            path: "macos/OpenFlowMac",
             linkerSettings: [.linkedFramework("AppKit"), .linkedFramework("Carbon")]
         ),
     ]

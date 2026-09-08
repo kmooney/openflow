@@ -1,0 +1,128 @@
+# OpenFlow for macOS
+
+```
+macos/OpenFlowMac/     this app — hotkey, paste, menu bar
+clients/shared/        the Kit it is built on, shared with iOS
+```
+
+The macOS target is deliberately thin, and none of its files contain dictation
+logic: audio, whisper, formatting and history all live in the shared Kit. If
+something needs `AppKit`, it belongs here; if it doesn't, it belongs in the Kit.
+See [../README.md](../README.md) for the full layout.
+
+## Build and run
+
+```sh
+cd clients/macos
+./build-macos.sh
+open build/OpenFlow.app
+```
+
+The script builds the Rust core, builds whisper.cpp statically if needed,
+compiles the Swift, assembles the `.app`, and links a model from `m0/` into
+`~/Library/Application Support/OpenFlow/models/` so the first run is instant.
+
+That link is a convenience, not a requirement — if no model is there, the app
+opens on the model chooser and downloads one.
+
+## Using it
+
+**Hold ⌃⌥, speak, release.** The text is transcribed, formatted, and pasted
+into whatever has focus. The chord is configurable in Settings.
+
+**The window** (menu bar → Open OpenFlow, or ⌘O) shows words spoken, a Listen
+button, and the full history: search it, copy any entry, delete entries one at a
+time or all at once. Closing the window leaves the app running in the menu bar;
+reopen from the same menu item.
+
+**Tone follows where you are dictating.** An address bar gets *very casual*,
+Mail gets *formal*, Slack gets *casual*. Picking a register is what teaches it:
+whatever you choose is remembered for the app — and for the address or search
+field specifically, which is the one field whose register differs from the app
+around it. The list button beside the picker shows everything remembered, and
+lets you change or delete any of it. Nothing is learned while you dictate with
+the Listen button, which has no destination to attribute a choice to.
+
+**Settings** (menu bar → Settings…, or ⌘, with the window focused) holds two
+tabs:
+
+- **General** — the push-to-talk chord, noise suppression, and keep-audio. To
+  change the chord, click it and *hold* the combination you want; it commits
+  when you let go. Two modifiers minimum, since one would fire every time you
+  reach for an ordinary shortcut. ⌃⌥ remains the default, and there is a reset
+  link back to it.
+- **Vocabulary** — the words whisper is biased toward, and which app each
+  list belongs to. Terms above any `[section]` apply everywhere; a
+  `[bundle.id]` header starts a list used only while that app has focus, which
+  is how you get "git status" in a terminal instead of "get status". The pane
+  shows the bundle id of the app you last dictated into and copies it as a
+  ready-to-paste header — that is the one thing the file itself cannot tell
+  you. App terms come first, so they survive whisper's ~224-token prompt cap.
+- **Model** — downloads, switches between and removes local Whisper models.
+  Base is fastest, Small is the desktop default, Large v3 Turbo is the most
+  accurate and the slowest to start. Everything runs on this Mac.
+
+Two details that matter:
+
+- **Listen copies rather than pastes.** When you press it the window has focus,
+  so pasting would put the text into OpenFlow itself. The hotkey pastes; the
+  button copies.
+- **History rows show the ledger** — every word the formatter changed and why —
+  and right-click offers *Show Original* to see exactly what you said before any
+  formatting.
+- **Every recording gets a row**, including ones that produced nothing. Those
+  are the ones worth listening back to; turn on *Keep audio* and they get a play
+  button.
+
+## Noisy places
+
+Three layers, and the third is the one that matters: Apple's voice-processing
+unit (AEC + noise suppression + AGC), a 4th-order high-pass at 85 Hz for rumble,
+and a check that refuses to transcribe obvious non-speech — whisper will
+otherwise invent fluent sentences out of engine noise.
+
+The gate is deliberately **permissive**: anything clearly audible is transcribed
+regardless of dynamics, because AGC flattens exactly the dynamic range a strict
+test keys on, and losing something you actually said is worse than a
+hallucination you can see and delete. Measured on real recordings: clean speech
+shows a 90th/10th percentile energy ratio of 3–11; the gate only rejects below
+0.006 RMS, or between 0.006 and 0.030 with a ratio under 1.5.
+
+## Permissions
+
+Three, and the app is useless without the first two:
+
+| permission | why |
+|---|---|
+| Accessibility | see the hotkey chord, and synthesize ⌘V to paste |
+| Microphone | hear you |
+| Input Monitoring | may be requested alongside Accessibility |
+
+The app asks for Accessibility only when it genuinely lacks it: it tries to
+install the event tap first and treats *that* as the answer, rather than trusting
+`AXIsProcessTrusted()`. Once you grant it, the hotkey starts working within a
+second — no relaunch.
+
+**If it re-asks after every rebuild**, that is the ad-hoc signature: macOS keys
+the grant to the code signature, and ad-hoc signatures change with the binary.
+To stop it, create a stable self-signed certificate once —
+
+> Keychain Access → Certificate Assistant → **Create a Certificate…**
+> Name: `OpenFlow Dev` · Identity Type: Self Signed Root · Certificate Type:
+> **Code Signing**
+
+`build-macos.sh` picks it up automatically from then on, and the grant persists
+across rebuilds.
+
+## Tests
+
+```sh
+cd clients && swift test            # 9 interop tests, from the package root
+cargo test -p openflow-core         # 60 formatting tests
+```
+
+The Swift tests deliberately cover **seams, not logic**: that the FFI round
+trips, that tone and the ledger survive the boundary, that whisper transcribes
+through the wrapper, that vocabulary biasing actually reaches whisper, and that
+the store counts spoken words. The formatting rules themselves are tested in
+Rust, where they live.

@@ -96,10 +96,9 @@ and support both:
 | **Standalone** | Mac app alone. Local whisper, local formatting, local SQLite history. No server, no container, no network. | One person, one machine. The simplest possible install. |
 | **Paired** | Clients + an OpenFlow server for cross-device history, the full driver runtime, and inference fallback for devices that can't do it locally. | Multiple devices, an iPhone, or BYO drivers that need a real host. |
 
-This is a departure from the README's "spin up an instance" framing, and it's
-worth being explicit about: under client-side inference, a single-Mac user never
-needs the container at all. I think that's a better first-run story, not a
-compromise — but it's a real change to the product's shape (§10 note).
+Worth being explicit about: under client-side inference, a single-Mac user never
+needs the container at all. Standalone is the first-run story, and the container
+exists for the paired mode rather than the common case (§10 note).
 
 ---
 
@@ -862,10 +861,12 @@ contains no dictation logic at all, which is the property to preserve.
 
 ### 6.1 macOS — the reference client, and in standalone mode the whole product
 
-**Built (M1).** `clients/` — SwiftPM, no Xcode project, `./build-macos.sh`
-assembles the `.app`. Push-to-talk on a held ⌃⌥ chord; transcribe, format,
-paste into focus; menu bar shows live duration, total words spoken, today's
-words, tone picker, vocabulary editor, and hard-delete.
+**Built (M1).** `clients/macos/` — SwiftPM, no Xcode project, `./build-macos.sh`
+assembles the `.app`. The package root is `clients/`, since the same package
+covers `macos/` and the shared Kit in `clients/shared/`. Push-to-talk on a held
+⌃⌥ chord; transcribe, format, paste into focus; menu bar shows live duration,
+total words spoken, today's words, tone picker, vocabulary editor, and
+hard-delete.
 
 Implementation notes worth keeping:
 

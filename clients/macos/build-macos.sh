@@ -3,7 +3,8 @@
 # which keeps the whole thing scriptable and diffable.
 set -euo pipefail
 cd "$(dirname "$0")"
-ROOT=$(cd .. && pwd)
+PKG=$(cd .. && pwd)          # the Swift package root, clients/
+ROOT=$(cd ../.. && pwd)      # the repo root
 APP=${1:-build/OpenFlow.app}
 WHISPER=$ROOT/m0/whisper.cpp
 
@@ -35,12 +36,12 @@ if [ ! -f "$WHISPER/build-static/src/libwhisper.a" ]; then
 fi
 
 echo "==> swift"
-swift build -c release 2>&1 | grep -vE "was built for newer|^$" || true
+(cd "$PKG" && swift build -c release 2>&1 | grep -vE "was built for newer|^$") || true
 
 echo "==> bundle"
 rm -rf "$APP"
 mkdir -p "$APP/Contents/MacOS" "$APP/Contents/Resources"
-cp .build/release/OpenFlowMac "$APP/Contents/MacOS/OpenFlow"
+cp "$PKG/.build/release/OpenFlowMac" "$APP/Contents/MacOS/OpenFlow"
 
 cat > "$APP/Contents/Info.plist" <<'PLIST'
 <?xml version="1.0" encoding="UTF-8"?>

@@ -11,7 +11,7 @@ options:
   deploymentTarget: { iOS: "17.0" }
   createIntermediateGroups: true
 
-# The shared Swift lives in ../Sources/OpenFlowKit and is compiled into a
+# The shared Swift lives in ../shared/OpenFlowKit and is compiled into a
 # framework here rather than consumed as a SwiftPM package: SwiftPM refuses
 # `unsafeFlags` in a package used as a dependency, and the macOS build needs
 # them for its static libraries. Same sources, different packaging.
@@ -20,7 +20,7 @@ targets:
     type: framework
     platform: iOS
     sources:
-      - path: ../Sources/OpenFlowKit
+      - path: ../shared/OpenFlowKit
     info:
       path: OpenFlowKit-Info.plist
       properties:
@@ -45,8 +45,8 @@ targets:
       # SWIFT_INCLUDE_PATHS alone; it has to be handed the file. Applied to
       # every target, because importing OpenFlowKit pulls its module
       # dependencies in transitively.
-      OTHER_SWIFT_FLAGS: -Xcc -fmodule-map-file=$(SRCROOT)/../Sources/CWhisper/module.modulemap -Xcc -fmodule-map-file=$(SRCROOT)/../Sources/COpenFlow/module.modulemap -Xcc -I$(SRCROOT)/../Sources/CWhisper/include -Xcc -I$(SRCROOT)/../Sources/COpenFlow/include
-      HEADER_SEARCH_PATHS: $(SRCROOT)/../Sources/CWhisper/include $(SRCROOT)/../Sources/COpenFlow/include
+      OTHER_SWIFT_FLAGS: -Xcc -fmodule-map-file=$(SRCROOT)/../shared/CWhisper/module.modulemap -Xcc -fmodule-map-file=$(SRCROOT)/../shared/COpenFlow/module.modulemap -Xcc -I$(SRCROOT)/../shared/CWhisper/include -Xcc -I$(SRCROOT)/../shared/COpenFlow/include
+      HEADER_SEARCH_PATHS: $(SRCROOT)/../shared/CWhisper/include $(SRCROOT)/../shared/COpenFlow/include
       DEFINES_MODULE: YES
       SWIFT_VERSION: "5.9"
       MARKETING_VERSION: "0.1.0"
@@ -56,7 +56,7 @@ targets:
     type: application
     platform: iOS
     sources:
-      - path: ../Sources/OpenFlowIOS
+      - path: OpenFlowIOS
       - path: Resources
         optional: true
         buildPhase: resources
@@ -105,8 +105,8 @@ targets:
       # SWIFT_INCLUDE_PATHS alone; it has to be handed the file. Applied to
       # every target, because importing OpenFlowKit pulls its module
       # dependencies in transitively.
-      OTHER_SWIFT_FLAGS: -Xcc -fmodule-map-file=$(SRCROOT)/../Sources/CWhisper/module.modulemap -Xcc -fmodule-map-file=$(SRCROOT)/../Sources/COpenFlow/module.modulemap -Xcc -I$(SRCROOT)/../Sources/CWhisper/include -Xcc -I$(SRCROOT)/../Sources/COpenFlow/include
-      HEADER_SEARCH_PATHS: $(SRCROOT)/../Sources/CWhisper/include $(SRCROOT)/../Sources/COpenFlow/include
+      OTHER_SWIFT_FLAGS: -Xcc -fmodule-map-file=$(SRCROOT)/../shared/CWhisper/module.modulemap -Xcc -fmodule-map-file=$(SRCROOT)/../shared/COpenFlow/module.modulemap -Xcc -I$(SRCROOT)/../shared/CWhisper/include -Xcc -I$(SRCROOT)/../shared/COpenFlow/include
+      HEADER_SEARCH_PATHS: $(SRCROOT)/../shared/CWhisper/include $(SRCROOT)/../shared/COpenFlow/include
       MARKETING_VERSION: "0.1.0"
       CURRENT_PROJECT_VERSION: "1"
       SWIFT_VERSION: "5.9"
@@ -115,7 +115,7 @@ targets:
     type: app-extension
     platform: iOS
     sources:
-      - path: ../Sources/OpenFlowKeyboard
+      - path: OpenFlowKeyboard
     info:
       path: Keyboard-Info.plist
       properties:
@@ -143,8 +143,8 @@ targets:
       # SWIFT_INCLUDE_PATHS alone; it has to be handed the file. Applied to
       # every target, because importing OpenFlowKit pulls its module
       # dependencies in transitively.
-      OTHER_SWIFT_FLAGS: -Xcc -fmodule-map-file=$(SRCROOT)/../Sources/CWhisper/module.modulemap -Xcc -fmodule-map-file=$(SRCROOT)/../Sources/COpenFlow/module.modulemap -Xcc -I$(SRCROOT)/../Sources/CWhisper/include -Xcc -I$(SRCROOT)/../Sources/COpenFlow/include
-      HEADER_SEARCH_PATHS: $(SRCROOT)/../Sources/CWhisper/include $(SRCROOT)/../Sources/COpenFlow/include
+      OTHER_SWIFT_FLAGS: -Xcc -fmodule-map-file=$(SRCROOT)/../shared/CWhisper/module.modulemap -Xcc -fmodule-map-file=$(SRCROOT)/../shared/COpenFlow/module.modulemap -Xcc -I$(SRCROOT)/../shared/CWhisper/include -Xcc -I$(SRCROOT)/../shared/COpenFlow/include
+      HEADER_SEARCH_PATHS: $(SRCROOT)/../shared/CWhisper/include $(SRCROOT)/../shared/COpenFlow/include
       MARKETING_VERSION: "0.1.0"
       CURRENT_PROJECT_VERSION: "1"
       SWIFT_VERSION: "5.9"
