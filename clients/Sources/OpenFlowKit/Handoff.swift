@@ -37,10 +37,25 @@ public struct Handoff {
     /// Posted when a transcript is written. No payload -- Darwin notifications
     /// cannot carry one across processes.
     public static let notificationName = "dev.openflow.transcript"
+    /// Posted by the keyboard to ask the app to start keeping audio. This only
+    /// works because the microphone is *already* open: nothing is started, a
+    /// flag is flipped, and iOS never sees a backgrounded app try to begin
+    /// capturing.
+    public static let startRequestName = "dev.openflow.start"
     /// Posted by the keyboard to ask the app to stop recording and transcribe.
     /// The reverse direction: the app is in the background while the user is
     /// back in their own app, so the keyboard needs a way to say "done".
     public static let stopRequestName = "dev.openflow.stop"
+    /// Throw the current recording away without transcribing it.
+    public static let cancelRequestName = "dev.openflow.cancel"
+    /// Put the microphone away and turn the indicator off. Allowed from the
+    /// background — it is only *starting* that iOS refuses — so the keyboard
+    /// can end a session without the user going back to the app.
+    public static let closeRequestName = "dev.openflow.close"
+    /// Posted by the app whenever its microphone state changes, so a keyboard
+    /// that happens to be on screen redraws at once instead of waiting for its
+    /// next poll.
+    public static let stateChangedName = "dev.openflow.state"
 
     public init(directory: URL) { self.directory = directory }
 
@@ -68,41 +83,120 @@ public struct Handoff {
         FileManager.default.fileExists(atPath: keyboardReadyURL.path)
     }
 
-    // MARK: - shared recording state
+    // MARK: - shared microphone state
     //
-    // The keyboard has to know whether the app is currently listening, so its
-    // microphone key can mean "stop and insert" rather than "open the app
-    // again". Two processes, so this lives in the container.
+    // Two facts, not one, and the split is the whole point. "Live" means the
+    // audio graph is running and the system indicator is lit; "recording"
+    // means we are keeping what it delivers. The keyboard needs both: a live
+    // microphone is one it can start a recording on from inside another app,
+    // and a closed one is only ever an instruction to go back to the app.
 
-    private struct SessionState: Codable {
-        var recording: Bool
-        var startedAt: Date
+    public struct MicState: Codable, Equatable, Sendable {
+        /// Session open, graph running, indicator lit.
+        public var live: Bool
+        /// Keeping audio right now.
+        public var recording: Bool
+        /// When the current recording began. Nil unless `recording`.
+        public var startedAt: Date?
+        /// Heartbeat. The app rewrites this while it is live so a keyboard can
+        /// tell "still going" from "the app was killed and nobody cleaned up".
+        public var updatedAt: Date
+
+        public init(live: Bool = false, recording: Bool = false,
+                    startedAt: Date? = nil, updatedAt: Date = Date()) {
+            self.live = live
+            self.recording = recording
+            self.startedAt = startedAt
+            self.updatedAt = updatedAt
+        }
+
+        public static let closed = MicState()
+
+        /// Seconds recorded so far, for the keyboard's own timer. Derived from
+        /// a timestamp rather than pushed as a number: the app is in the
+        /// background and cannot be relied on to tick.
+        public var elapsed: TimeInterval {
+            guard recording, let startedAt else { return 0 }
+            return max(0, Date().timeIntervalSince(startedAt))
+        }
     }
 
-    public func setRecording(_ recording: Bool) {
-        let state = SessionState(recording: recording, startedAt: Date())
+    /// How long a heartbeat stays believable. The app rewrites it every few
+    /// seconds while live; well beyond that and the process is gone.
+    public static let heartbeatTimeout: TimeInterval = 20
+
+    public func setMic(live: Bool, recording: Bool, startedAt: Date? = nil) {
+        let state = MicState(live: live, recording: recording,
+                             startedAt: recording ? (startedAt ?? Date()) : nil)
+        try? JSONEncoder().encode(state).write(to: sessionURL, options: .atomic)
+        Self.post(Self.stateChangedName)
+    }
+
+    /// Rewrite the timestamp without changing anything else. Called on a timer
+    /// while the microphone is open.
+    public func heartbeat() {
+        guard var state = storedMicState() else { return }
+        state.updatedAt = Date()
         try? JSONEncoder().encode(state).write(to: sessionURL, options: .atomic)
     }
 
-    /// Is the app recording right now? Stale state is treated as "no": if the
-    /// app was killed mid-recording the flag would otherwise stick forever and
-    /// the keyboard's microphone key would never open the app again.
-    public func isRecording(staleAfter: TimeInterval = 300) -> Bool {
-        guard let data = try? Data(contentsOf: sessionURL),
-              let state = try? JSONDecoder().decode(SessionState.self, from: data),
-              state.recording,
-              Date().timeIntervalSince(state.startedAt) < staleAfter
-        else { return false }
-        return true
+    private func storedMicState() -> MicState? {
+        guard let data = try? Data(contentsOf: sessionURL) else { return nil }
+        return try? JSONDecoder().decode(MicState.self, from: data)
     }
 
+    /// What the app is doing. A stale heartbeat reads as closed: if the app
+    /// was killed mid-recording the flag would otherwise stick forever and the
+    /// keyboard would keep offering to finish a recording that no longer
+    /// exists.
+    public func micState(staleAfter: TimeInterval = Handoff.heartbeatTimeout) -> MicState {
+        guard let state = storedMicState(),
+              Date().timeIntervalSince(state.updatedAt) < staleAfter
+        else { return .closed }
+        return state
+    }
+
+    /// Is the app recording right now?
+    public func isRecording(staleAfter: TimeInterval = Handoff.heartbeatTimeout) -> Bool {
+        micState(staleAfter: staleAfter).recording
+    }
+
+    /// Is the microphone open — whether or not anything is being kept?
+    public func isLive(staleAfter: TimeInterval = Handoff.heartbeatTimeout) -> Bool {
+        micState(staleAfter: staleAfter).live
+    }
+
+    // MARK: - requests from the keyboard
+
+    /// Ask the app to start keeping audio.
+    public static func requestStart() { post(startRequestName) }
     /// Ask the app to stop recording and transcribe.
-    public static func requestStop() {
-        post(stopRequestName)
+    public static func requestStop() { post(stopRequestName) }
+    /// Ask the app to throw the current recording away.
+    public static func requestCancel() { post(cancelRequestName) }
+    /// Ask the app to put the microphone away entirely.
+    public static func requestClose() { post(closeRequestName) }
+
+    public static func observeStartRequests(_ handler: @escaping () -> Void) -> NSObjectProtocol {
+        observe(name: startRequestName, handler)
     }
 
     public static func observeStopRequests(_ handler: @escaping () -> Void) -> NSObjectProtocol {
         observe(name: stopRequestName, handler)
+    }
+
+    public static func observeCancelRequests(_ handler: @escaping () -> Void) -> NSObjectProtocol {
+        observe(name: cancelRequestName, handler)
+    }
+
+    public static func observeCloseRequests(_ handler: @escaping () -> Void) -> NSObjectProtocol {
+        observe(name: closeRequestName, handler)
+    }
+
+    /// Observe the app's microphone state changing. Used by the keyboard so it
+    /// redraws the instant something happens rather than on its next poll.
+    public static func observeStateChanges(_ handler: @escaping () -> Void) -> NSObjectProtocol {
+        observe(name: stateChangedName, handler)
     }
 
     // MARK: - what the app is actually doing
@@ -115,10 +209,34 @@ public struct Handoff {
 
     private var statusURL: URL { directory.appendingPathComponent("status") }
 
+    /// Marks a status line as a failure the keyboard should stop waiting on.
+    /// A transcription that fails posts no transcript notification, so without
+    /// this the keyboard has nothing to distinguish "still working" from "over,
+    /// and it did not work" — and sat on *Working* until its timeout.
+    public static let failurePrefix = "!"
+
     /// Record what just happened, for the keyboard to display.
     public func setStatus(_ line: String) {
         try? Data("\(Date().timeIntervalSince1970)|\(line)".utf8)
             .write(to: statusURL, options: .atomic)
+        // Wake a keyboard that is on screen. Polling would find this within a
+        // quarter second anyway; a failure the user is staring at deserves not
+        // to wait even that long.
+        Self.post(Self.stateChangedName)
+    }
+
+    /// Record a failure. The keyboard shows it and stops waiting.
+    public func setFailure(_ line: String) {
+        setStatus(Self.failurePrefix + line)
+    }
+
+    /// The app's last reported failure, if recent enough to be about the thing
+    /// the user just did. Consumed by reading, so one failure is shown once.
+    public func takeFailure(within seconds: TimeInterval = 30) -> String? {
+        guard let line = lastStatus(within: seconds),
+              line.hasPrefix(Self.failurePrefix) else { return nil }
+        try? FileManager.default.removeItem(at: statusURL)
+        return String(line.dropFirst(Self.failurePrefix.count))
     }
 
     /// The app's last reported state, if recent enough to still describe now.

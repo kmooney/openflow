@@ -13,6 +13,11 @@ struct RootView: View {
                 stats
                 Divider()
                 HistoryList(state: state)
+                // Above the recorder, not over it. As an overlay this card
+                // sat squarely on the microphone button, hiding the elapsed
+                // time and the key that finishes the recording — at the exact
+                // moment it was telling the user the recording was running.
+                if state.showSwipeHint { SwipeBackHint(state: state) }
                 Divider()
                 recorder
             }
@@ -97,6 +102,9 @@ struct RootView: View {
                 .padding(.horizontal, 12)
                 .textSelection(.enabled)
 
+            // One key, and only one. Discard and close-the-microphone live
+            // on the keyboard instead: by the time you want either, you are in
+            // another app and this screen is not where you are looking.
             Button(action: state.toggle) {
                 ZStack {
                     Circle()
@@ -104,7 +112,7 @@ struct RootView: View {
                         .frame(width: 76, height: 76)
                         .scaleEffect(state.isRecording ? 1 + min(0.18, level * 0.4) : 1)
                         .animation(.easeOut(duration: 0.1), value: level)
-                    Image(systemName: state.isRecording ? "stop.fill" : "mic.fill")
+                    Image(systemName: primarySymbol)
                         .font(.system(size: 28, weight: .medium))
                         .foregroundStyle(.white)
                 }
@@ -112,11 +120,22 @@ struct RootView: View {
             .disabled(state.isThinking)
             .buttonStyle(.plain)
 
-            Text(state.isRecording ? "Tap to finish" : "Tap and speak")
+            Text(primaryCaption)
                 .font(.caption)
                 .foregroundStyle(.tertiary)
         }
         .padding(.vertical, 16)
+    }
+
+    private var primarySymbol: String {
+        if state.isRecording { return "checkmark" }
+        return "mic.fill"
+    }
+
+    private var primaryCaption: String {
+        if state.isRecording { return "Tap to finish and insert" }
+        if state.isLive { return "Microphone open — tap to speak" }
+        return "Tap to open the microphone"
     }
 
     private var level: Double {
@@ -126,7 +145,49 @@ struct RootView: View {
     private var statusLine: String {
         if state.isRecording { return String(format: "● %.1fs", state.elapsed) }
         if state.isThinking { return "transcribing…" }
+        if state.isLive, state.status.isEmpty { return "○ microphone open" }
         return state.status
+    }
+}
+
+/// What to do next, at the moment there is nothing on screen to say it.
+///
+/// The session is open and the user's next move is to *leave* — which is the
+/// one instruction an app cannot give by putting a button somewhere, because
+/// the gesture is a system one along the bottom edge. So it is drawn: an arrow
+/// that runs the length of the home indicator, in the direction of the swipe.
+struct SwipeBackHint: View {
+    @ObservedObject var state: AppState
+    @State private var slide = false
+
+    var body: some View {
+        VStack(spacing: 10) {
+            Text("Now go back to your app")
+                .font(.headline)
+            Text("Swipe right along the bottom edge. The microphone stays open — bring up the OpenFlow keyboard, tap Speak, then tap Insert when you are done.")
+                .font(.footnote)
+                .foregroundStyle(.secondary)
+                .multilineTextAlignment(.center)
+
+            ZStack(alignment: .leading) {
+                Capsule().fill(.quaternary).frame(height: 6)
+                Image(systemName: "arrow.right")
+                    .font(.system(size: 15, weight: .bold))
+                    .foregroundStyle(Color.accentColor)
+                    .offset(x: slide ? 150 : 0)
+                    .animation(.easeInOut(duration: 1.2).repeatForever(autoreverses: false),
+                               value: slide)
+            }
+            .frame(width: 180, height: 18)
+
+            Button("Got it") { state.showSwipeHint = false }
+                .font(.subheadline)
+        }
+        .padding(16)
+        .frame(maxWidth: .infinity)
+        .background(Color.accentColor.opacity(0.10))
+        .transition(.move(edge: .bottom).combined(with: .opacity))
+        .onAppear { slide = true }
     }
 }
 

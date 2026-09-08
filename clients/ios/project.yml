@@ -76,6 +76,14 @@ targets:
         # app the moment it leaves the foreground and the recording dies
         # mid-sentence.
         UIBackgroundModes: [audio]
+        # The Dynamic Island / lock-screen activity that reports the open
+        # microphone. iOS's own indicator is a coloured dot: it cannot say
+        # which app, or for how long, and a session that stays open while the
+        # user works elsewhere needs both.
+        NSSupportsLiveActivities: true
+        # No push updates: the app is alive under the `audio` background mode
+        # for as long as the activity is relevant, and updates itself.
+        NSSupportsLiveActivitiesFrequentUpdates: false
         NSMicrophoneUsageDescription: >-
           OpenFlow transcribes your speech on this device. Audio is never
           uploaded and is discarded after transcription.
@@ -95,12 +103,43 @@ targets:
         embed: true
       - target: OpenFlowKeyboard
         embed: true
+      - target: OpenFlowActivity
+        embed: true
       # The app owns the Frameworks directory; the extension loads from it too.
       - framework: ../Frameworks/whisper.xcframework
         embed: true
         codeSign: true
     settings:
       PRODUCT_BUNDLE_IDENTIFIER: dev.openflow.ios
+      # Xcode's explicitly-built modules will not discover a module map from
+      # SWIFT_INCLUDE_PATHS alone; it has to be handed the file. Applied to
+      # every target, because importing OpenFlowKit pulls its module
+      # dependencies in transitively.
+      OTHER_SWIFT_FLAGS: -Xcc -fmodule-map-file=$(SRCROOT)/../Sources/CWhisper/module.modulemap -Xcc -fmodule-map-file=$(SRCROOT)/../Sources/COpenFlow/module.modulemap -Xcc -I$(SRCROOT)/../Sources/CWhisper/include -Xcc -I$(SRCROOT)/../Sources/COpenFlow/include
+      HEADER_SEARCH_PATHS: $(SRCROOT)/../Sources/CWhisper/include $(SRCROOT)/../Sources/COpenFlow/include
+      MARKETING_VERSION: "0.1.0"
+      CURRENT_PROJECT_VERSION: "1"
+      SWIFT_VERSION: "5.9"
+
+  # The Live Activity. A separate target because WidgetKit extensions must be,
+  # not because there is much in it: the app owns the session and this only
+  # draws it.
+  OpenFlowActivity:
+    type: app-extension
+    platform: iOS
+    sources:
+      - path: ../Sources/OpenFlowActivity
+    info:
+      path: Activity-Info.plist
+      properties:
+        CFBundleDisplayName: OpenFlow Activity
+        NSExtension:
+          NSExtensionPointIdentifier: com.apple.widgetkit-extension
+    dependencies:
+      - target: OpenFlowKit
+        embed: false
+    settings:
+      PRODUCT_BUNDLE_IDENTIFIER: dev.openflow.ios.activity
       # Xcode's explicitly-built modules will not discover a module map from
       # SWIFT_INCLUDE_PATHS alone; it has to be handed the file. Applied to
       # every target, because importing OpenFlowKit pulls its module

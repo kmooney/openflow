@@ -1,7 +1,13 @@
 import Foundation
 
 public enum DictationState: Sendable, Equatable {
+    /// Microphone closed. No indicator, nothing running.
     case idle
+    /// Microphone open and running, but nothing is being kept. The system
+    /// recording indicator is lit and iOS considers the app to be capturing —
+    /// which is precisely what buys the ability to start a recording later
+    /// from the background.
+    case open
     case recording
     case thinking
     case failed(String)
@@ -36,10 +42,28 @@ public final class DictationEngine {
     /// Reject recordings that are probably just room noise instead of letting
     /// whisper confabulate sentences out of them.
     public var rejectNonSpeech = true
+    /// Hold the microphone open between recordings rather than opening it for
+    /// each one. iOS sets this; macOS does not need it and pays the indicator
+    /// for nothing. See `AudioRecorder.open()` for why the alternative does
+    /// not exist on iOS.
+    public var holdMicrophoneOpen: Bool {
+        get { recorder.keepSessionOpen }
+        set { recorder.keepSessionOpen = newValue }
+    }
     /// Spectral-subtraction noise reduction, applied after capture. Ours, not
     /// the OS's -- see NoiseReduction for why. Safe to leave on: it returns a
     /// clean recording untouched.
     public var noiseReduction = true
+    /// Whether to run whisper on the GPU.
+    ///
+    /// **iOS will not let a backgrounded app use the GPU**, and transcribing
+    /// from the background is the entire point of the keyboard — so this is
+    /// false exactly then. Set per transcription by the caller, which is the
+    /// only place that knows whether the app is on screen.
+    ///
+    /// Not a one-way fallback: a single background failure used to swap a CPU
+    /// context in permanently and make in-app dictation slow forever after.
+    public var preferGPU = true
     public private(set) var state: DictationState = .idle {
         didSet { if state != oldValue { onState?(state) } }
     }
@@ -51,7 +75,52 @@ public final class DictationEngine {
     public init(modelPath: String, store: Store) {
         self.modelPath = modelPath
         self.store = store
+        recorder.onLiveChange = { [weak self] live in
+            guard let self else { return }
+            DispatchQueue.main.async {
+                self.onLive?(live)
+                // A session taken away mid-recording still has audio worth
+                // transcribing, so `.recording` is left alone and `end()` will
+                // hand back what was captured before the interruption.
+                if !live, self.state == .open { self.state = .idle }
+            }
+        }
     }
+
+    /// The microphone opened or was taken away. Distinct from `onState`
+    /// because the keyboard extension needs to know about the *session*, not
+    /// about any particular recording.
+    public var onLive: (@Sendable (Bool) -> Void)?
+
+    /// Microphone open and running.
+    public var isLive: Bool { recorder.isLive }
+
+    /// Open the microphone and leave it open.
+    ///
+    /// **Foreground only.** This is the one operation iOS will not let a
+    /// backgrounded app perform, and every other affordance — the keyboard's
+    /// microphone key especially — exists downstream of it having already
+    /// happened.
+    public func openMicrophone() throws {
+        try recorder.open()
+        if state == .idle || isFailed(state) { state = .open }
+    }
+
+    /// Put the microphone away. Allowed from the background.
+    public func closeMicrophone() {
+        if recorder.isRecording { _ = recorder.stop() }
+        recorder.close()
+        state = .idle
+    }
+
+    private func isFailed(_ s: DictationState) -> Bool {
+        if case .failed = s { return true }
+        return false
+    }
+
+    /// Where the state machine rests after a recording: back to an open
+    /// microphone if we are holding one, otherwise all the way to idle.
+    private var restingState: DictationState { recorder.isLive ? .open : .idle }
 
     /// Switch to a different model. The old one is dropped and the new one
     /// loaded off the main queue, so the UI does not stall on a 500 MB file.
@@ -68,12 +137,32 @@ public final class DictationEngine {
 
     public var currentModelPath: String { modelPath }
 
+    /// Choose the backend ahead of time and load it now.
+    ///
+    /// Called when the app crosses into or out of the background, because that
+    /// is exactly when the right backend changes and exactly when there is time
+    /// to pay for it. Switching costs a 147 MB model reload; done lazily it
+    /// lands in the middle of the first utterance after the switch, which is
+    /// the one moment it must not.
+    public func prepare(forGPU gpu: Bool) {
+        guard preferGPU != gpu || transcriber?.requestedGPU != gpu else { return }
+        preferGPU = gpu
+        guard !modelPath.isEmpty else { return }
+        work.async { [self] in
+            guard transcriber?.requestedGPU != gpu else { return }
+            transcriber = nil            // free the old weights before loading
+            transcriber = Transcriber(modelPath: modelPath, useGPU: gpu)
+        }
+    }
+
     /// Load the model once, up front. It costs ~150ms and the user should
     /// never pay it mid-utterance.
     public func warmUp() {
         guard !modelPath.isEmpty else { return }
         work.async { [self] in
-            if transcriber == nil { transcriber = Transcriber(modelPath: modelPath) }
+            if transcriber == nil {
+                transcriber = Transcriber(modelPath: modelPath, useGPU: preferGPU)
+            }
         }
     }
 
@@ -119,6 +208,9 @@ public final class DictationEngine {
             let e = error as NSError
             NSLog("openflow: recorder start failed: %@ %ld", e.domain, e.code)
             state = .failed("start failed: \(e.domain) \(e.code) — \(e.localizedDescription)")
+            // A start that fails against a live session leaves the graph in an
+            // unknown state; do not keep claiming the microphone is open.
+            if !recorder.isLive { recorder.close() }
         }
     }
 
@@ -132,6 +224,11 @@ public final class DictationEngine {
         DispatchQueue.main.asyncAfter(deadline: .now() + 0.5) { [weak self] in
             guard let self, self.recorder.isRecording, !self.recorder.hasSignal else { return }
             self.voiceProcessingFailed = true
+            // Discard the silence first. `start()` is a no-op while the
+            // recorder still believes it is recording, so without this the
+            // "restart" restarted nothing and the user spoke a whole utterance
+            // into the dead graph anyway.
+            _ = self.recorder.stop()
             self.recorder.disableVoiceProcessing()
             do {
                 try self.recorder.start()          // fresh engine, no VPIO
@@ -140,6 +237,19 @@ public final class DictationEngine {
                 self.state = .failed("microphone unavailable: \(error.localizedDescription)")
             }
         }
+    }
+
+    /// Stop recording and throw the audio away. The microphone stays open.
+    ///
+    /// Nothing is written to history: this is the user saying "forget that",
+    /// and a row recording that they changed their mind is not evidence of
+    /// anything. Distinct from `end()`, which records even its failures.
+    @discardableResult
+    public func discard() -> Bool {
+        guard recorder.isRecording else { return false }
+        _ = recorder.stop()
+        state = restingState
+        return true
     }
 
     /// Stop, transcribe, format, persist. `completion` runs on the main queue.
@@ -153,6 +263,21 @@ public final class DictationEngine {
         let hadVoiceProcessing = recorder.noiseSuppressionActive
         let samples = recorder.stop()
         let audioMS = Int(Double(samples.count) / 16.0)
+
+        // What the microphone actually delivered, on every recording without
+        // exception.
+        //
+        // "no words recognised" is the same sentence whether whisper was handed
+        // four seconds of clear speech or eighty milliseconds of nothing, and
+        // those are opposite problems with opposite fixes. The level meter is
+        // no help either: it is fed by the tap, which runs whether or not the
+        // samples are being kept, so a lively meter over an empty capture looks
+        // exactly like a working one.
+        let peak = samples.reduce(Float(0)) { max($0, abs($1)) }
+        let peakDB = peak > 0 ? 20 * log10(peak) : -120
+        let evidence = String(format: "%.1fs, peak %.0f dBFS", Double(audioMS) / 1000, peakDB)
+        NSLog("openflow: captured %d samples (%d ms), peak %.1f dBFS, %d dropped chunks",
+              samples.count, audioMS, peakDB, recorder.conversionFailures)
 
         // Digital silence is never a real recording. If voice processing was on
         // it is the cause: turn it off for good and say so, rather than blaming
@@ -168,7 +293,7 @@ public final class DictationEngine {
         if recorder.lastCaptureWasSilent, hadVoiceProcessing, !voiceProcessingFailed {
             voiceProcessingFailed = true
             recorder.disableVoiceProcessing()
-            state = .idle
+            state = restingState
             completion(.failure(NSError(domain: "openflow", code: 5, userInfo: [
                 NSLocalizedDescriptionKey:
                     failures > 0
@@ -199,12 +324,21 @@ public final class DictationEngine {
             let audio = denoise ? NoiseReduction.reduce(samples) : samples
 
             func fail(_ outcome: String, _ message: String) {
+                // Every failure carries what was captured. Without it the user
+                // is told the transcription failed and given nothing to tell
+                // apart a dead capture from a live one whisper could not read.
+                let message = "\(message) (\(evidence))"
+                // The success path logs its timing; without this the failure
+                // path is the one case that leaves no trace in the console at
+                // all — which is exactly the case worth reading.
+                NSLog("openflow: giving up — %@ [%@] after %d ms",
+                      message, outcome, Int(Date().timeIntervalSince(t0) * 1000))
                 store.record(raw: "", final: "", tone: tone, spokenWords: 0,
                              durationMS: audioMS, latencyMS: Int(Date().timeIntervalSince(t0) * 1000),
                              guardrailPassed: true, ledger: "[]", appContext: appContext,
                              audioPath: audioPath, outcome: outcome)
                 DispatchQueue.main.async {
-                    self.state = .idle
+                    self.state = self.restingState
                     completion(.failure(NSError(domain: "openflow", code: 4, userInfo: [
                         NSLocalizedDescriptionKey: message])))
                 }
@@ -219,8 +353,14 @@ public final class DictationEngine {
                             verdict == .silence ? "heard nothing" : "only background noise")
             }
 
+            // Rebuild only when the backend is wrong for where we are running.
+            // Foreground → background → foreground costs two reloads, not one
+            // per utterance.
+            if let t = transcriber, t.requestedGPU != preferGPU {
+                transcriber = nil
+            }
             if transcriber == nil, !modelPath.isEmpty {
-                transcriber = Transcriber(modelPath: modelPath)
+                transcriber = Transcriber(modelPath: modelPath, useGPU: preferGPU)
             }
             guard let transcriber else {
                 return fail("empty", modelPath.isEmpty
@@ -228,11 +368,43 @@ public final class DictationEngine {
                             : "could not load model at \(modelPath)")
             }
 
-            let raw = transcriber.transcribe(samples: audio, vocabulary: vocab)
-            guard !raw.isEmpty else { return fail("empty", "no words recognised") }
+            var raw = transcriber.transcribe(samples: audio, vocabulary: vocab)
+
+            // A failed whisper run and a silent one both come back as "".
+            // Retry once on the CPU: Metal is the only part of this that has
+            // ever failed while everything around it worked, and a slow
+            // transcription is worth immeasurably more than none. The CPU
+            // context is kept — a GPU that just failed is not going to start
+            // working on the next utterance.
+            if raw.isEmpty, transcriber.lastStatus != 0, transcriber.usesGPU {
+                let status = transcriber.lastStatus
+                NSLog("openflow: whisper failed on the GPU (%d) — retrying on the CPU", status)
+                if let cpu = Transcriber(modelPath: modelPath, useGPU: false) {
+                    self.transcriber = cpu
+                    raw = cpu.transcribe(samples: audio, vocabulary: vocab)
+                    if !raw.isEmpty {
+                        DispatchQueue.main.async {
+                            self.onNotice?("Switched to CPU transcription — the GPU path failed (\(status)).")
+                        }
+                    }
+                }
+            }
+
+            guard !raw.isEmpty else {
+                // Never the same sentence for both. "no words recognised" sent
+                // every previous investigation at the microphone, which was
+                // working the whole time.
+                let code = self.transcriber?.lastStatus ?? 0
+                return fail("empty", code != 0
+                            ? "transcription failed — whisper returned \(code)"
+                            : "no words recognised")
+            }
 
             let result = Formatter.format(raw, tone: tone)
             let latencyMS = Int(Date().timeIntervalSince(t0) * 1000)
+            NSLog("openflow: transcribed %d ms of audio in %d ms (gpu=%@, %d threads)",
+                  audioMS, latencyMS, (self.transcriber?.usesGPU ?? false) ? "yes" : "no",
+                  Transcriber.defaultThreads)
             let ledgerJSON = (try? JSONEncoder().encode(result.ledger))
                 .flatMap { String(data: $0, encoding: .utf8) } ?? "[]"
 
@@ -243,7 +415,7 @@ public final class DictationEngine {
                          audioPath: audioPath, outcome: "ok")
 
             DispatchQueue.main.async {
-                self.state = .idle
+                self.state = self.restingState
                 completion(.success(DictationOutcome(
                     text: result.formatted, result: result,
                     audioMS: audioMS, latencyMS: latencyMS)))

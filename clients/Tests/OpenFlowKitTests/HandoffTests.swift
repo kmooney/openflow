@@ -76,3 +76,119 @@ final class HandoffTests: XCTestCase {
         wait(for: [fired], timeout: 2)
     }
 }
+
+// MARK: - microphone state
+//
+// Two facts, not one. "Live" is a microphone the keyboard can start a
+// recording on from inside another app; "recording" is one already keeping
+// audio. Collapsing them is what forced dictation to begin in the app.
+
+extension HandoffTests {
+
+    func testMicStateDefaultsToClosed() throws {
+        let (handoff, dir) = try makeHandoff()
+        defer { try? FileManager.default.removeItem(at: dir) }
+
+        XCTAssertEqual(handoff.micState(), .closed)
+        XCTAssertFalse(handoff.isLive())
+        XCTAssertFalse(handoff.isRecording())
+    }
+
+    /// The state the whole design exists to represent: microphone open, not
+    /// recording. The keyboard reads this as "I can start one from here".
+    func testLiveWithoutRecording() throws {
+        let (handoff, dir) = try makeHandoff()
+        defer { try? FileManager.default.removeItem(at: dir) }
+
+        handoff.setMic(live: true, recording: false)
+        XCTAssertTrue(handoff.isLive())
+        XCTAssertFalse(handoff.isRecording())
+        XCTAssertNil(handoff.micState().startedAt)
+        XCTAssertEqual(handoff.micState().elapsed, 0)
+    }
+
+    /// Elapsed time is derived from a start date rather than pushed as a
+    /// number: the app is in the background while this matters and cannot be
+    /// relied on to tick.
+    func testElapsedComesFromTheStartDate() throws {
+        let (handoff, dir) = try makeHandoff()
+        defer { try? FileManager.default.removeItem(at: dir) }
+
+        handoff.setMic(live: true, recording: true,
+                       startedAt: Date().addingTimeInterval(-12))
+        let state = handoff.micState()
+        XCTAssertTrue(state.recording)
+        XCTAssertEqual(state.elapsed, 12, accuracy: 1)
+    }
+
+    /// A recording that is not recording has no start date to leak into the
+    /// keyboard's timer.
+    func testStartDateIsClearedWhenNotRecording() throws {
+        let (handoff, dir) = try makeHandoff()
+        defer { try? FileManager.default.removeItem(at: dir) }
+
+        handoff.setMic(live: true, recording: true)
+        handoff.setMic(live: true, recording: false)
+        XCTAssertNil(handoff.micState().startedAt)
+    }
+
+    /// If the app is killed mid-session nothing cleans the file up, and the
+    /// keyboard would otherwise offer to finish a recording that no longer
+    /// exists — forever.
+    func testStaleStateReadsAsClosed() throws {
+        let (handoff, dir) = try makeHandoff()
+        defer { try? FileManager.default.removeItem(at: dir) }
+
+        handoff.setMic(live: true, recording: true)
+        XCTAssertTrue(handoff.isLive(staleAfter: 60))
+        XCTAssertEqual(handoff.micState(staleAfter: -1), .closed,
+                       "a heartbeat older than the timeout is not evidence of anything")
+    }
+
+    /// The heartbeat exists to keep a long, quiet session believable without
+    /// pretending anything about it changed.
+    func testHeartbeatRefreshesWithoutChangingState() throws {
+        let (handoff, dir) = try makeHandoff()
+        defer { try? FileManager.default.removeItem(at: dir) }
+
+        handoff.setMic(live: true, recording: true,
+                       startedAt: Date().addingTimeInterval(-30))
+        let before = handoff.micState()
+        Thread.sleep(forTimeInterval: 0.05)
+        handoff.heartbeat()
+        let after = handoff.micState()
+
+        XCTAssertEqual(after.live, before.live)
+        XCTAssertEqual(after.recording, before.recording)
+        XCTAssertEqual(after.startedAt, before.startedAt,
+                       "the timer must not restart every five seconds")
+        XCTAssertGreaterThan(after.updatedAt, before.updatedAt)
+    }
+
+    /// Nothing to refresh is not an error, and must not invent a session.
+    func testHeartbeatOnNothingStaysClosed() throws {
+        let (handoff, dir) = try makeHandoff()
+        defer { try? FileManager.default.removeItem(at: dir) }
+
+        handoff.heartbeat()
+        XCTAssertEqual(handoff.micState(), .closed)
+    }
+
+    /// Each request is a distinct channel: a keyboard asking to start must
+    /// never be heard as a keyboard asking to stop.
+    func testRequestChannelsAreDistinct() {
+        let start = expectation(description: "start")
+        let stop = expectation(description: "stop")
+        stop.isInverted = true
+
+        let startToken = Handoff.observeStartRequests { start.fulfill() }
+        let stopToken = Handoff.observeStopRequests { stop.fulfill() }
+        defer {
+            Handoff.removeObserver(startToken)
+            Handoff.removeObserver(stopToken)
+        }
+
+        Handoff.requestStart()
+        wait(for: [start, stop], timeout: 2)
+    }
+}

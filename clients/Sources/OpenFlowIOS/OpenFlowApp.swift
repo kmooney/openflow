@@ -4,6 +4,7 @@ import OpenFlowKit
 @main
 struct OpenFlowApp: App {
     @StateObject private var state: AppState
+    @Environment(\.scenePhase) private var scenePhase
 
     init() {
         let support = FileManager.default.urls(for: .applicationSupportDirectory,
@@ -31,12 +32,21 @@ struct OpenFlowApp: App {
     var body: some Scene {
         WindowGroup {
             RootView(state: state)
+                .onChange(of: scenePhase) { _, phase in
+                    // Every arrival, not only a cold launch: coming back from
+                    // the keyboard's "open the app" case looks identical to
+                    // launching, and both mean the same thing — the user is
+                    // here to talk.
+                    guard phase == .active else { return }
+                    state.openMicrophoneOnAppearing()
+                }
                 .onOpenURL { url in
-                    // Launched by the keyboard's mic key: start listening at
-                    // once, so the user can speak without a second tap.
+                    // Arriving from the keyboard is not a different case: the
+                    // scene became active, which already opened the microphone.
+                    // All this adds is the note explaining where the text will
+                    // go.
                     guard url.scheme == OpenFlowIDs.urlScheme, url.host == "dictate" else { return }
                     state.handedOffFromKeyboard = true
-                    state.begin()
                 }
         }
     }
