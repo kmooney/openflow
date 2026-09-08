@@ -24,18 +24,29 @@ public final class ModelStore: ObservableObject {
     /// Called when the active model changes, so the engine can reload.
     public var onSelectionChanged: ((URL) -> Void)?
 
-    public init(directory: URL, bundle: Bundle = .main) {
+    /// `defaultID` is what to select when the user has never chosen. iOS ships
+    /// a model inside the app and starts there; macOS ships none and prefers
+    /// the bigger one M0 measured as the desktop default.
+    public init(directory: URL, bundle: Bundle = .main,
+                defaultID: String = ModelCatalog.bundledID) {
         self.directory = directory
         self.bundle = bundle
-        self.selectedID = UserDefaults.standard.string(forKey: "selectedModel")
-            ?? ModelCatalog.bundledID
+        self.selectedID = UserDefaults.standard.string(forKey: "selectedModel") ?? defaultID
         try? FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
         refresh()
-        // A model can be deleted out from under the selection; never leave the
-        // app pointing at something that is not there.
-        if location(of: selectedID) == nil, let fallback = installed.first {
-            selectedID = fallback
+        // A model can be deleted out from under the selection, and on macOS the
+        // default may simply not be downloaded yet; never leave the app
+        // pointing at something that is not there.
+        if location(of: selectedID) == nil {
+            selectedID = bestInstalled() ?? ""
         }
+    }
+
+    /// Deliberately catalog order rather than `installed.first`: `installed` is
+    /// a Set, so that picked a different model between launches for anyone
+    /// holding two of them.
+    private func bestInstalled() -> String? {
+        ModelCatalog.all.first { installed.contains($0.id) }?.id
     }
 
     public func refresh() {
@@ -148,7 +159,7 @@ public final class ModelStore: ObservableObject {
         // model that is not present -- that guard made the fallback a no-op and
         // left the selection pointing at the file just deleted.
         if let next = installed.contains(ModelCatalog.bundledID)
-            ? ModelCatalog.bundledID : installed.sorted().first {
+            ? ModelCatalog.bundledID : bestInstalled() {
             select(next)
         } else {
             selectedID = ""          // nothing usable; activeURL is nil

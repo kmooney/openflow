@@ -85,6 +85,46 @@ final class ModelStoreTests: XCTestCase {
         XCTAssertNotNil(store.activeURL)
     }
 
+    /// macOS ships no model at all, so the default is one that has to be
+    /// downloaded and the store opens pointing at nothing until it is.
+    func testAMissingDefaultLeavesNothingActiveRatherThanACorruptSelection() throws {
+        let dir = URL(fileURLWithPath: NSTemporaryDirectory())
+            .appendingPathComponent("of-models-\(UUID().uuidString)")
+        try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: dir) }
+        UserDefaults.standard.removeObject(forKey: "selectedModel")
+
+        let empty = ModelStore(directory: dir, bundle: Bundle(for: ModelStoreTests.self),
+                               defaultID: "small.en")
+        XCTAssertNil(empty.activeURL)
+        XCTAssertTrue(empty.installed.isEmpty)
+
+        try fakeModel("small.en", in: dir)
+        let ready = ModelStore(directory: dir, bundle: Bundle(for: ModelStoreTests.self),
+                               defaultID: "small.en")
+        XCTAssertEqual(ready.selectedID, "small.en")
+        XCTAssertNotNil(ready.activeURL)
+    }
+
+    /// `installed` is a Set, so falling back through it used to pick a
+    /// different model between launches for anyone holding two.
+    func testTheFallbackIsTheSameModelEveryLaunch() throws {
+        let dir = URL(fileURLWithPath: NSTemporaryDirectory())
+            .appendingPathComponent("of-models-\(UUID().uuidString)")
+        try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: dir) }
+        try fakeModel("tiny.en", in: dir)
+        try fakeModel("small.en", in: dir)
+
+        for _ in 0..<8 {
+            UserDefaults.standard.removeObject(forKey: "selectedModel")
+            let store = ModelStore(directory: dir, bundle: Bundle(for: ModelStoreTests.self),
+                                   defaultID: "large-v3-turbo-q5_0")
+            XCTAssertEqual(store.selectedID, "tiny.en",
+                           "first in catalogue order among what is installed")
+        }
+    }
+
     func testDiskUsageCountsDownloads() throws {
         let (store, dir) = try makeStore()
         defer { try? FileManager.default.removeItem(at: dir) }

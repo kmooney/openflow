@@ -55,14 +55,21 @@ final class AppModel: ObservableObject {
     /// Bumped on every write so SwiftUI reloads the remembered-tones list.
     @Published private(set) var memoryRevision = 0
 
+    /// Opens the model sheet. Set from the menu bar as well as the window, so
+    /// it lives on the model rather than in a view's state.
+    @Published var showingModels = false
+
     let engine: DictationEngine
     let memory: ToneMemory
+    let models: ModelStore
     private let store: Store
     private var tick: Timer?
+    private var bag = Set<AnyCancellable>()
 
-    init(engine: DictationEngine, store: Store) {
+    init(engine: DictationEngine, store: Store, models: ModelStore) {
         self.engine = engine
         self.store = store
+        self.models = models
         self.stats = store.stats()
         let fallback = Tone(rawValue: UInt32(UserDefaults.standard.integer(forKey: "tone"))) ?? .formal
         self.tone = fallback
@@ -82,8 +89,28 @@ final class AppModel: ObservableObject {
                 if self.noiseSuppression { self.noiseSuppression = false }
             }
         }
+        // Republish the two things the menu bar and the footer read -- which
+        // model is active, and whether any exist. Deliberately not
+        // `models.objectWillChange`: that fires on every download progress
+        // chunk, and the menu bar rebuilds its whole NSMenu on each republish.
+        models.$selectedID.map { _ in () }
+            .merge(with: models.$installed.map { _ in () })
+            .sink { [weak self] in self?.objectWillChange.send() }
+            .store(in: &bag)
         reloadHistory()
     }
+
+    // MARK: - models
+
+    func showModels() { showingModels = true }
+
+    var activeModelName: String {
+        ModelCatalog.model(id: models.selectedID)?.displayName ?? "none"
+    }
+
+    /// Nothing usable installed. The Listen button and the hotkey both need
+    /// this to be false before they can produce anything.
+    var needsModel: Bool { models.activeURL == nil }
 
     var isRecording: Bool { if case .recording = state { return true }; return false }
 

@@ -27,23 +27,18 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         guard let store = try? Store(path: dir.appendingPathComponent("history.sqlite").path) else {
             return fatal("Could not open the history database in \(dir.path).")
         }
-        guard let modelURL = Self.resolveModel() else {
-            return fatal("""
-            No Whisper model found.
-
-            Put ggml-small.en.bin in:
-            \(dir.appendingPathComponent("models").path)
-
-            (clients/build-macos.sh downloads and links one.)
-            """)
-        }
-
-        let engine = DictationEngine(modelPath: modelURL.path, store: store)
+        // No model is no longer fatal. It used to be, which meant the only way
+        // to get one was a shell script -- so the app quit at launch rather
+        // than offering the download it is perfectly capable of doing.
+        let models = ModelStore(directory: dir.appendingPathComponent("models"),
+                                defaultID: "small.en")
+        let engine = DictationEngine(modelPath: models.activeURL?.path ?? "", store: store)
         engine.vocabulary = Vocabulary.load(from: dir.appendingPathComponent("vocab.txt"))
         engine.supportDirectory = dir
         engine.warmUp()
+        models.onSelectionChanged = { [weak engine] url in engine?.useModel(at: url.path) }
 
-        model = AppModel(engine: engine, store: store)
+        model = AppModel(engine: engine, store: store, models: models)
         model.onRequestAccessibility = { [weak self] in self?.openAccessibilitySettings() }
         windowController = MainWindowController(model: model)
 
@@ -77,7 +72,13 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         followFrontmostApp()
 
         buildMenu()
-        if !UserDefaults.standard.bool(forKey: "launchedBefore") {
+        if models.activeURL == nil {
+            // Nothing to transcribe with: open on the one screen that fixes it
+            // rather than failing at the first press of the hotkey.
+            model.status = "No speech model yet — pick one to download."
+            model.showModels()
+            windowController.show()
+        } else if !UserDefaults.standard.bool(forKey: "launchedBefore") {
             UserDefaults.standard.set(true, forKey: "launchedBefore")
             windowController.show()
         }
@@ -225,6 +226,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         audio.target = self
         audio.state = model.keepAudio ? .on : .off
         menu.addItem(audio)
+        add(menu, "Speech Model: \(model.activeModelName)…", #selector(openModels))
         add(menu, "Edit Vocabulary…", #selector(openVocab))
         add(menu, "Quit OpenFlow", #selector(quit), key: "q")
         statusItem.menu = menu
@@ -264,6 +266,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         buildMenu()
     }
 
+    @objc private func openModels() {
+        windowController.show()
+        model.showModels()
+    }
+
     @objc private func openVocab() {
         let url = Self.supportDir.appendingPathComponent("vocab.txt")
         if !FileManager.default.fileExists(atPath: url.path) {
@@ -280,13 +287,6 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     }
 
     @objc private func quit() { NSApp.terminate(nil) }
-
-    private static func resolveModel() -> URL? {
-        let dir = supportDir.appendingPathComponent("models")
-        return ["ggml-small.en.bin", "ggml-base.en.bin", "ggml-large-v3-turbo.bin"]
-            .map { dir.appendingPathComponent($0) }
-            .first { FileManager.default.fileExists(atPath: $0.path) }
-    }
 
     private func notify(_ title: String, _ body: String) {
         let a = NSAlert()

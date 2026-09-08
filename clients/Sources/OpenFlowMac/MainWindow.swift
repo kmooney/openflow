@@ -11,6 +11,7 @@ struct MainWindow: View {
             HistoryPane(model: model)
         }
         .frame(minWidth: 560, minHeight: 420)
+        .sheet(isPresented: $model.showingModels) { ModelsSheet(model: model) }
     }
 }
 
@@ -39,7 +40,7 @@ private struct Header: View {
                 .keyboardShortcut(.space, modifiers: [])
                 .buttonStyle(.borderedProminent)
                 .tint(model.isRecording ? .red : .accentColor)
-                .disabled(isThinking)
+                .disabled(isThinking || model.needsModel)
 
                 // Not bound straight to `model.tone`: picking is the teaching
                 // signal, and it has to register even when you pick the tone
@@ -295,6 +296,17 @@ private struct HistoryPane: View {
                         .font(.system(size: 10)).foregroundStyle(.tertiary)
                 }
                 Spacer()
+                Button {
+                    model.showModels()
+                } label: {
+                    Label(model.needsModel ? "No speech model" : model.activeModelName,
+                          systemImage: model.needsModel
+                              ? "exclamationmark.triangle.fill" : "waveform.badge.mic")
+                        .font(.system(size: 11))
+                }
+                .buttonStyle(.borderless)
+                .foregroundStyle(model.needsModel ? Color.orange : Color.secondary)
+                .help("Choose or download the model that transcribes your speech")
                 Button("Delete All…", role: .destructive, action: confirmDeleteAll)
                     .disabled(model.stats.utterances == 0)
             }

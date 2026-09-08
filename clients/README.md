@@ -28,6 +28,8 @@ The script builds the Rust core, builds whisper.cpp statically if needed,
 compiles the Swift, assembles the `.app`, and links a model from `m0/` into
 `~/Library/Application Support/OpenFlow/models/` so the first run is instant.
 
+That link is a convenience, not a requirement — if no model is there, the app
+opens on the model chooser and downloads one.
 
 ## Using it
 
@@ -46,6 +48,11 @@ field specifically, which is the one field whose register differs from the app
 around it. The list button beside the picker shows everything remembered, and
 lets you change or delete any of it. Nothing is learned while you dictate with
 the Listen button, which has no destination to attribute a choice to.
+
+**Choosing a model** (menu bar → Speech Model…, or the button in the window's
+bottom bar) downloads, switches between and removes local Whisper models. Base
+is fastest, Small is the desktop default, Large v3 Turbo is the most accurate
+and the slowest to start. Everything runs on this Mac.
 
 Two details that matter:
 

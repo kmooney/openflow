@@ -57,10 +57,12 @@ public final class DictationEngine {
     /// loaded off the main queue, so the UI does not stall on a 500 MB file.
     public func useModel(at path: String) {
         guard path != modelPath else { return }
+        // Reload eagerly: the user picked a model and the next thing they do is
+        // hold the key, which must not pay the load.
         work.async { [self] in
             transcriber = nil            // free the old weights before loading
             modelPath = path
-            transcriber = Transcriber(modelPath: path)
+            if !path.isEmpty { transcriber = Transcriber(modelPath: path) }
         }
     }
 
@@ -69,10 +71,15 @@ public final class DictationEngine {
     /// Load the model once, up front. It costs ~150ms and the user should
     /// never pay it mid-utterance.
     public func warmUp() {
+        guard !modelPath.isEmpty else { return }
         work.async { [self] in
             if transcriber == nil { transcriber = Transcriber(modelPath: modelPath) }
         }
     }
+
+    /// False when there is nothing to transcribe with -- on macOS, before the
+    /// first model has been downloaded.
+    public var hasModel: Bool { !modelPath.isEmpty }
 
     public var isRecording: Bool { recorder.isRecording }
     public var recordedSeconds: TimeInterval { recorder.duration }
@@ -200,9 +207,13 @@ public final class DictationEngine {
                             verdict == .silence ? "heard nothing" : "only background noise")
             }
 
-            if transcriber == nil { transcriber = Transcriber(modelPath: modelPath) }
+            if transcriber == nil, !modelPath.isEmpty {
+                transcriber = Transcriber(modelPath: modelPath)
+            }
             guard let transcriber else {
-                return fail("empty", "could not load model at \(modelPath)")
+                return fail("empty", modelPath.isEmpty
+                            ? "No speech model installed — choose one in Speech Model."
+                            : "could not load model at \(modelPath)")
             }
 
             let raw = transcriber.transcribe(samples: audio, vocabulary: vocab)
