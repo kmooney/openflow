@@ -9,6 +9,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     private let hotkey = HotkeyMonitor()
     private var model: AppModel!
     private var windowController: MainWindowController!
+    private var preferences: PreferencesWindowController!
     private var bag = Set<AnyCancellable>()
     private var hotkeyReady = false
 
@@ -41,6 +42,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         model = AppModel(engine: engine, store: store, models: models)
         model.onRequestAccessibility = { [weak self] in self?.openAccessibilitySettings() }
         windowController = MainWindowController(model: model)
+        preferences = PreferencesWindowController(model: model)
+        model.onShowPreferences = { [weak self] tab in self?.preferences.show(tab) }
 
         // Menu bar mirrors the model rather than keeping its own copy.
         model.$state.sink { [weak self] in self?.render($0) }.store(in: &bag)
@@ -68,6 +71,17 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             self.model.finish(.paste)
         }
 
+        hotkey.chord = model.chord.appKitFlags
+        model.onChordChanged = { [weak self] chord in
+            guard let self else { return }
+            self.hotkey.chord = chord.appKitFlags
+            // start() re-installs both monitors; a false here means the grant
+            // is gone, not that the new chord is bad.
+            self.hotkeyReady = self.hotkey.start()
+            self.model.hotkeyReady = self.hotkeyReady
+            self.buildMenu()
+        }
+
         setUpHotkey()
         followFrontmostApp()
 
@@ -76,8 +90,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             // Nothing to transcribe with: open on the one screen that fixes it
             // rather than failing at the first press of the hotkey.
             model.status = "No speech model yet — pick one to download."
-            model.showModels()
-            windowController.show()
+            model.showPreferences(.model)
         } else if !UserDefaults.standard.bool(forKey: "launchedBefore") {
             UserDefaults.standard.set(true, forKey: "launchedBefore")
             windowController.show()
@@ -146,7 +159,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             if self.hotkey.start() {
                 self.hotkeyReady = true
                 self.model?.hotkeyReady = true
-                self.model?.status = "Hotkey ready — hold ⌃⌥ to talk"
+                self.model?.status = "Hotkey ready — hold \(self.model?.chord.symbols ?? "") to talk"
                 self.buildMenu()
                 return
             }
@@ -203,7 +216,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         menu.addItem(header("\(s.utterances) utterances · \(Int(s.secondsSpoken / 60)) min of speech"))
         menu.addItem(.separator())
         if hotkeyReady {
-            menu.addItem(header("Hold ⌃⌥ to talk, release to paste"))
+            menu.addItem(header("Hold \(model.chord.symbols) to talk, release to paste"))
         } else {
             add(menu, "⚠︎ Grant Accessibility permission…", #selector(openAccessibilitySettings))
         }
@@ -221,11 +234,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             add(menu, "Forget Tone for \(model.context.label)", #selector(forgetTone))
         }
         menu.addItem(.separator())
-        let audio = NSMenuItem(title: "Keep Audio for Debugging",
-                               action: #selector(toggleKeepAudio), keyEquivalent: "")
-        audio.target = self
-        audio.state = model.keepAudio ? .on : .off
-        menu.addItem(audio)
+        add(menu, "Settings…", #selector(openPreferences), key: ",")
         add(menu, "Speech Model: \(model.activeModelName)…", #selector(openModels))
         add(menu, "Edit Vocabulary…", #selector(openVocab))
         add(menu, "Quit OpenFlow", #selector(quit), key: "q")
@@ -261,15 +270,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         waitForPermission()
     }
 
-    @objc private func toggleKeepAudio() {
-        model.keepAudio.toggle()
-        buildMenu()
-    }
+    @objc private func openModels() { model.showPreferences(.model) }
 
-    @objc private func openModels() {
-        windowController.show()
-        model.showModels()
-    }
+    @objc private func openPreferences() { model.showPreferences(.general) }
 
     @objc private func openVocab() {
         let url = Self.supportDir.appendingPathComponent("vocab.txt")
@@ -278,6 +281,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             # Words OpenFlow should expect: names, places, jargon.
             # One per line. Lines starting with # are ignored.
             # Whisper's prompt caps around 224 tokens, so keep the most-used first.
+
             """.write(to: url, atomically: true, encoding: .utf8)
         }
         NSWorkspace.shared.open(url)

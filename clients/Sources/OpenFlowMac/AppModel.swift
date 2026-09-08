@@ -55,9 +55,12 @@ final class AppModel: ObservableObject {
     /// Bumped on every write so SwiftUI reloads the remembered-tones list.
     @Published private(set) var memoryRevision = 0
 
-    /// Opens the model sheet. Set from the menu bar as well as the window, so
-    /// it lives on the model rather than in a view's state.
-    @Published var showingModels = false
+    /// The chord that opens the microphone. Changing it re-arms the monitor
+    /// through `onChordChanged`; nothing else in the app reads the raw mask.
+    @Published private(set) var chord: ModifierChord
+    var onChordChanged: ((ModifierChord) -> Void)?
+    /// Set by the delegate, which owns the preferences window.
+    var onShowPreferences: ((PreferencesTab) -> Void)?
 
     let engine: DictationEngine
     let memory: ToneMemory
@@ -71,6 +74,8 @@ final class AppModel: ObservableObject {
         self.store = store
         self.models = models
         self.stats = store.stats()
+        let storedChord = UserDefaults.standard.object(forKey: "chord") as? Int
+        self.chord = storedChord.map { ModifierChord(mask: UInt($0)) } ?? .default
         let fallback = Tone(rawValue: UInt32(UserDefaults.standard.integer(forKey: "tone"))) ?? .formal
         self.tone = fallback
         self.memory = ToneMemory(storage: UserDefaultsToneStorage(), fallback: fallback)
@@ -100,9 +105,22 @@ final class AppModel: ObservableObject {
         reloadHistory()
     }
 
-    // MARK: - models
+    // MARK: - settings
 
-    func showModels() { showingModels = true }
+    func showPreferences(_ tab: PreferencesTab = .general) { onShowPreferences?(tab) }
+
+    /// Rejects anything that would fire during ordinary typing rather than
+    /// storing it and leaving the user with a hotkey that never stops.
+    func setChord(_ new: ModifierChord) {
+        guard new.isUsable, new != chord else { return }
+        chord = new
+        UserDefaults.standard.set(Int(new.mask), forKey: "chord")
+        onChordChanged?(new)
+        status = "Push to talk is now \(new.symbols)"
+        clearStatusSoon()
+    }
+
+    // MARK: - models
 
     var activeModelName: String {
         ModelCatalog.model(id: models.selectedID)?.displayName ?? "none"

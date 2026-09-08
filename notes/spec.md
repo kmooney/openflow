@@ -14,6 +14,8 @@ Status: draft for review. Nothing built yet.
   parameter — built and measured in M0
 - v0.9: **vocabulary biasing** for proper nouns (measured, §5.2), spoken
   **quote-unquote** (§4.5), signature handling (§4.4)
+- v2.9: **a settings window** — the push-to-talk chord is configurable (⌃⌥
+  stays the default), and the model picker and audio toggles move into it
 - v2.8: the **macOS client downloads and switches models** like iOS does
   (§6.1) — a missing model opens the chooser instead of quitting
 - v2.7: **tone is remembered per app and per field** (§4.4.1) — a URL bar is
@@ -1119,6 +1121,12 @@ fixed-height container. Reveal, never insert.
   to formal, an address bar to very casual in any browser, and picking a
   register teaches the destination it was picked in. It was indeed the
   difference between a setting and something that just behaves correctly.
+- **A settings window** ✅ built. The push-to-talk chord is chosen by holding
+  it, not by picking from a list, and is committed on release: pressing ⌃ then
+  ⌥ would otherwise commit ⌃ alone the instant it went down. Two modifiers is
+  the enforced floor — one fires the moment you reach for any ordinary
+  shortcut — and a chord containing ⌘ or ⇧ is accepted with a warning, because
+  those are held constantly during ⌘⇧Z or a shift-selection.
 - **Model management** ✅ built. The Mac app downloads, switches and removes
   models over the same `ModelStore` as iOS, so changing model is no longer a
   shell task. Missing models are no longer fatal at launch: the app opens on

@@ -17,6 +17,13 @@ import OpenFlowKit
 /// Installing just the global one gives a hotkey that works everywhere except
 /// your own window; just the local one gives the opposite, which is what
 /// happened here.
+public extension ModifierChord {
+    /// The bridge into AppKit. `ModifierChord` spells the bits out itself
+    /// because OpenFlowKit is shared with iOS and cannot import AppKit; this is
+    /// the one place that conversion is allowed to happen.
+    var appKitFlags: NSEvent.ModifierFlags { NSEvent.ModifierFlags(rawValue: mask) }
+}
+
 public final class HotkeyMonitor {
     /// Default: hold Control-Option.
     public var chord: NSEvent.ModifierFlags = [.control, .option]

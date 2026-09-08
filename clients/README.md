@@ -34,7 +34,7 @@ opens on the model chooser and downloads one.
 ## Using it
 
 **Hold ⌃⌥, speak, release.** The text is transcribed, formatted, and pasted
-into whatever has focus.
+into whatever has focus. The chord is configurable in Settings.
 
 **The window** (menu bar → Open OpenFlow, or ⌘O) shows words spoken, a Listen
 button, and the full history: search it, copy any entry, delete entries one at a
@@ -49,10 +49,17 @@ around it. The list button beside the picker shows everything remembered, and
 lets you change or delete any of it. Nothing is learned while you dictate with
 the Listen button, which has no destination to attribute a choice to.
 
-**Choosing a model** (menu bar → Speech Model…, or the button in the window's
-bottom bar) downloads, switches between and removes local Whisper models. Base
-is fastest, Small is the desktop default, Large v3 Turbo is the most accurate
-and the slowest to start. Everything runs on this Mac.
+**Settings** (menu bar → Settings…, or ⌘, with the window focused) holds two
+tabs:
+
+- **General** — the push-to-talk chord, noise suppression, and keep-audio. To
+  change the chord, click it and *hold* the combination you want; it commits
+  when you let go. Two modifiers minimum, since one would fire every time you
+  reach for an ordinary shortcut. ⌃⌥ remains the default, and there is a reset
+  link back to it.
+- **Model** — downloads, switches between and removes local Whisper models.
+  Base is fastest, Small is the desktop default, Large v3 Turbo is the most
+  accurate and the slowest to start. Everything runs on this Mac.
 
 Two details that matter:
 

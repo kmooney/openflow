@@ -11,7 +11,12 @@ struct MainWindow: View {
             HistoryPane(model: model)
         }
         .frame(minWidth: 560, minHeight: 420)
-        .sheet(isPresented: $model.showingModels) { ModelsSheet(model: model) }
+        // An accessory app has no app menu, so ⌘, has to be bound by a view.
+        .background {
+            Button("") { model.showPreferences() }
+                .keyboardShortcut(",", modifiers: .command)
+                .hidden()
+        }
     }
 }
 
@@ -92,8 +97,8 @@ private struct Header: View {
                 HStack(spacing: 8) {
                     Image(systemName: "exclamationmark.triangle.fill")
                         .foregroundStyle(.orange)
-                    Text("The ⌃⌥ hotkey only works inside this window until OpenFlow "
-                         + "has Accessibility permission.")
+                    Text("The \(model.chord.symbols) hotkey only works inside this window "
+                         + "until OpenFlow has Accessibility permission.")
                         .font(.system(size: 11))
                     Button("Open Settings…") { model.onRequestAccessibility?() }
                         .controlSize(.small)
@@ -104,7 +109,8 @@ private struct Header: View {
             }
 
             HStack(spacing: 10) {
-                Text("Hold ⌃⌥ anywhere to dictate into the focused app. Listen copies here instead.")
+                Text("Hold \(model.chord.symbols) anywhere to dictate into the focused app. "
+                     + "Listen copies here instead.")
                     .font(.system(size: 11))
                     .foregroundStyle(.tertiary)
                 Spacer()
@@ -269,7 +275,7 @@ private struct HistoryPane: View {
                     model.query.isEmpty ? "Nothing dictated yet" : "No matches",
                     systemImage: model.query.isEmpty ? "waveform" : "magnifyingglass",
                     description: Text(model.query.isEmpty
-                        ? "Hold ⌃⌥ and say something, or press Listen."
+                        ? "Hold \(model.chord.symbols) and say something, or press Listen."
                         : "No utterance contains “\(model.query)”."))
                 .frame(maxHeight: .infinity)
             } else {
@@ -282,14 +288,6 @@ private struct HistoryPane: View {
             HStack(spacing: 12) {
                 Text("\(model.history.count) shown")
                     .font(.system(size: 11)).foregroundStyle(.secondary)
-                Toggle("Noise suppression", isOn: $model.noiseSuppression)
-                    .toggleStyle(.checkbox)
-                    .font(.system(size: 11))
-                    .help("Spectral noise reduction for steady background noise — aircraft, fans, HVAC. Applied after recording, so it cannot affect capture. A clean recording is left untouched.")
-                Toggle("Keep audio", isOn: $model.keepAudio)
-                    .toggleStyle(.checkbox)
-                    .font(.system(size: 11))
-                    .help("Store each recording on disk so you can replay it. Off by default.")
                 if model.keepAudio || model.audioOnDiskBytes > 0 {
                     Text(ByteCountFormatter.string(fromByteCount: model.audioOnDiskBytes,
                                                    countStyle: .file))
@@ -297,7 +295,7 @@ private struct HistoryPane: View {
                 }
                 Spacer()
                 Button {
-                    model.showModels()
+                    model.showPreferences(.model)
                 } label: {
                     Label(model.needsModel ? "No speech model" : model.activeModelName,
                           systemImage: model.needsModel
