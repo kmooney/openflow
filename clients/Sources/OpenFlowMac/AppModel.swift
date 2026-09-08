@@ -346,6 +346,8 @@ final class AppModel: ObservableObject {
     }
 
     func reloadVocabulary(from url: URL) {
+        vocabularyURL = url
+        vocabularyText = (try? String(contentsOf: url, encoding: .utf8)) ?? ""
         vocabulary = VocabularyBook.load(from: url)
         engine.vocabulary = vocabulary.terms(for: context)
         let here = vocabulary.terms(for: context).count
@@ -357,4 +359,32 @@ final class AppModel: ObservableObject {
 
     /// What the next utterance will be biased toward, for the settings pane.
     var vocabularyHere: [String] { vocabulary.terms(for: context) }
+
+    /// Raw file contents, so an editor can merge into it rather than over it.
+    private(set) var vocabularyText = ""
+    private var vocabularyURL: URL?
+
+    /// Write a seeded list into one app's section and reload.
+    ///
+    /// The file is rewritten rather than appended to, so a backup goes down
+    /// first: this is a file the user hand-edits, and losing it to a bad merge
+    /// would be unforgivable for a convenience feature.
+    func seedVocabulary(_ terms: [String], for bundleID: String) {
+        guard let url = vocabularyURL else { return }
+        let updated = VocabularyFile.replacingSection(
+            in: vocabularyText, app: bundleID, terms: terms)
+        do {
+            if FileManager.default.fileExists(atPath: url.path) {
+                try? FileManager.default.removeItem(at: url.appendingPathExtension("bak"))
+                try FileManager.default.copyItem(
+                    at: url, to: url.appendingPathExtension("bak"))
+            }
+            try updated.write(to: url, atomically: true, encoding: .utf8)
+            reloadVocabulary(from: url)
+            status = "Added \(terms.count) terms for \(bundleID)"
+        } catch {
+            status = "Could not write vocabulary: \(error.localizedDescription)"
+        }
+        clearStatusSoon()
+    }
 }

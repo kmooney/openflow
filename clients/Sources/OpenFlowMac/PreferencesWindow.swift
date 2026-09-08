@@ -194,6 +194,7 @@ private final class ChordRecorder: ObservableObject {
 /// there is no way to guess it.
 private struct VocabularyPane: View {
     @ObservedObject var model: AppModel
+    @State private var seeding = false
 
     var body: some View {
         Form {
@@ -252,11 +253,15 @@ private struct VocabularyPane: View {
                     }
                 }
 
-                Button("Edit Vocabulary…") { model.onEditVocabulary?() }
+                HStack {
+                    Button("Edit Vocabulary…") { model.onEditVocabulary?() }
+                    Button("Seed from Browser History…") { seeding = true }
+                }
             }
         }
         .formStyle(.grouped)
         .frame(height: 400)
+        .sheet(isPresented: $seeding) { SeedVocabularySheet(model: model) }
     }
 
     private var summary: String {
