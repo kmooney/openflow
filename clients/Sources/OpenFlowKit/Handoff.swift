@@ -37,13 +37,6 @@ public struct Handoff {
     /// Posted when a transcript is written. No payload -- Darwin notifications
     /// cannot carry one across processes.
     public static let notificationName = "dev.openflow.transcript"
-    /// Posted by the keyboard to ask the app to *start* recording.
-    ///
-    /// This exists because iOS no longer lets a keyboard extension open its
-    /// containing app — the responder-chain `openURL:` route is closed. So the
-    /// keyboard cannot bring the app forward; instead the app stays alive in
-    /// the background holding an audio session, and the keyboard drives it.
-    public static let startRequestName = "dev.openflow.start"
     /// Posted by the keyboard to ask the app to stop recording and transcribe.
     /// The reverse direction: the app is in the background while the user is
     /// back in their own app, so the keyboard needs a way to say "done".
@@ -75,27 +68,6 @@ public struct Handoff {
         FileManager.default.fileExists(atPath: keyboardReadyURL.path)
     }
 
-    private var heartbeatURL: URL { directory.appendingPathComponent("alive") }
-
-    /// The app touches this while it is running and able to respond. The
-    /// keyboard has no way to ask whether the app is alive, so the app has to
-    /// keep saying so.
-    public func beat() {
-        try? Data(String(Date().timeIntervalSince1970).utf8)
-            .write(to: heartbeatURL, options: .atomic)
-    }
-
-    /// Can the app respond to a start request right now?
-    public func appIsAlive(within seconds: TimeInterval = 20) -> Bool {
-        guard let raw = try? String(contentsOf: heartbeatURL, encoding: .utf8),
-              let stamp = TimeInterval(raw) else { return false }
-        return Date().timeIntervalSince1970 - stamp < seconds
-    }
-
-    public func clearHeartbeat() {
-        try? FileManager.default.removeItem(at: heartbeatURL)
-    }
-
     // MARK: - shared recording state
     //
     // The keyboard has to know whether the app is currently listening, so its
@@ -124,13 +96,6 @@ public struct Handoff {
         return true
     }
 
-    /// Ask the app to start recording.
-    public static func requestStart() { post(startRequestName) }
-
-    public static func observeStartRequests(_ handler: @escaping () -> Void) -> NSObjectProtocol {
-        observe(name: startRequestName, handler)
-    }
-
     /// Ask the app to stop recording and transcribe.
     public static func requestStop() {
         post(stopRequestName)
@@ -138,6 +103,31 @@ public struct Handoff {
 
     public static func observeStopRequests(_ handler: @escaping () -> Void) -> NSObjectProtocol {
         observe(name: stopRequestName, handler)
+    }
+
+    // MARK: - what the app is actually doing
+    //
+    // The keyboard cannot see the app's state, read its logs, or tell the
+    // difference between "did not receive the request", "received it and
+    // failed to start", and "started fine". Without this it can only report
+    // its own optimism, which is how a dead microphone came to display
+    // "Listening…".
+
+    private var statusURL: URL { directory.appendingPathComponent("status") }
+
+    /// Record what just happened, for the keyboard to display.
+    public func setStatus(_ line: String) {
+        try? Data("\(Date().timeIntervalSince1970)|\(line)".utf8)
+            .write(to: statusURL, options: .atomic)
+    }
+
+    /// The app's last reported state, if recent enough to still describe now.
+    public func lastStatus(within seconds: TimeInterval = 60) -> String? {
+        guard let raw = try? String(contentsOf: statusURL, encoding: .utf8) else { return nil }
+        let parts = raw.split(separator: "|", maxSplits: 1)
+        guard parts.count == 2, let stamp = TimeInterval(parts[0]),
+              Date().timeIntervalSince1970 - stamp < seconds else { return nil }
+        return String(parts[1])
     }
 
     /// Offer a transcript for the keyboard to insert.

@@ -1,5 +1,4 @@
 import UIKit
-import AVFoundation
 import OpenFlowKit
 
 /// The OpenFlow keyboard.
@@ -18,7 +17,6 @@ final class KeyboardViewController: UIInputViewController {
 
     private var handoff: Handoff?
     private var observer: NSObjectProtocol?
-    private var stopObserver: NSObjectProtocol?
     private let status = UILabel()
     private var micButton: UIButton!
 
@@ -29,9 +27,6 @@ final class KeyboardViewController: UIInputViewController {
         // that the keyboard is actually usable.
         if hasFullAccess { handoff?.markKeyboardReady() }
         buildKeyboard()
-        stopObserver = Handoff.observe { [weak self] in
-            DispatchQueue.main.async { self?.insertPendingIfAny() }
-        }
         observer = Handoff.observe { [weak self] in
             DispatchQueue.main.async { self?.insertPendingIfAny() }
         }
@@ -39,7 +34,6 @@ final class KeyboardViewController: UIInputViewController {
 
     deinit {
         if let observer { Handoff.removeObserver(observer) }
-        if let stopObserver { Handoff.removeObserver(stopObserver) }
     }
 
     override func viewWillAppear(_ animated: Bool) {
@@ -74,8 +68,12 @@ final class KeyboardViewController: UIInputViewController {
             status.text = "Text ready — tap to insert"
             setMic(symbol: "text.insert", title: " Insert")
         } else {
-            status.text = "Tap to dictate"
-            setMic(symbol: "mic.fill", title: nil)
+            // iOS will not let a backgrounded app start the microphone, so
+            // this key cannot begin a recording however much we would like it
+            // to. It says what actually works instead of offering something
+            // that silently fails.
+            status.text = "Dictate in the OpenFlow app — your text arrives here"
+            setMic(symbol: "arrow.up.forward.app", title: " Open OpenFlow")
         }
     }
 
@@ -105,109 +103,61 @@ final class KeyboardViewController: UIInputViewController {
             // transcript arrives by notification and is inserted below.
             Handoff.requestStop()
             status.text = "Transcribing…"
+            // The key has to stop looking tappable. It used to keep saying
+            // "Finish" and stay enabled, so the obvious reading of a slow
+            // transcription was that the tap had not registered -- and each
+            // extra tap posted another stop request.
+            micButton.isEnabled = false
+            setMic(symbol: "ellipsis", title: " Working")
+            // A transcription that fails posts no notification at all, so
+            // nothing would ever re-enable the key. Recover on a timer rather
+            // than leaving it dead until the keyboard is dismissed.
+            DispatchQueue.main.asyncAfter(deadline: .now() + 8) { [weak self] in
+                guard let self, !self.micButton.isEnabled else { return }
+                self.refreshState()
+            }
             return
         }
         if handoff?.hasPending == true {
             insertPendingIfAny()
             return
         }
-        // If the app is alive in the background it can start recording without
-        // being brought forward -- no app switch at all, which is better than
-        // flipping even when flipping works.
-        if handoff?.appIsAlive() == true {
-            Handoff.requestStart()
-            status.text = "Listening… tap to finish"
-            setMic(symbol: "stop.circle.fill", title: " Finish")
-            return
-        }
         openContainingApp()
     }
 
-    /// Open the app so it can record.
+    /// Ask iOS to bring the app forward, then tell the truth about it.
     ///
-    /// Three routes, tried in order, because which of them works has moved
-    /// between iOS releases and the failure is silent either way. The status
-    /// label reports which one succeeded so this stops being guesswork.
+    /// Measured on iOS 26: `extensionContext.open` returns false, and the
+    /// undocumented responder-chain `openURL:` walk finds a responder, calls
+    /// it, and nothing happens. Both routes are dead for keyboard extensions.
+    ///
+    /// They are still *attempted*, because the cost is nothing and the rule
+    /// has moved between releases before, but neither is allowed to claim
+    /// success: the old code said "Opening OpenFlow…" the instant the chain
+    /// accepted the selector, which looked exactly like success while the user
+    /// sat on an unchanged screen.
     private func openContainingApp() {
         let url = OpenFlowIDs.dictateURL
-
-        // 1. The documented API. Apple says a keyboard extension gets `false`
-        //    here, but that is worth testing rather than assuming.
-        if let ctx = extensionContext {
-            ctx.open(url) { [weak self] opened in
-                DispatchQueue.main.async {
-                    guard let self else { return }
-                    if opened {
-                        self.flash("Opening OpenFlow…")
-                    } else {
-                        self.openViaResponderChain(url)
-                    }
-                }
-            }
-            return
-        }
-        openViaResponderChain(url)
+        extensionContext?.open(url, completionHandler: nil)
+        attemptResponderChain(url)
+        status.text = hasFullAccess
+            ? "Open OpenFlow and tap its microphone. Come back here and your text lands where the cursor is."
+            : "Open OpenFlow to turn on Full Access, then this keyboard can receive your text."
     }
 
     /// An extension has no `UIApplication`, so walk the responder chain for
-    /// anything that implements `openURL:`. Undocumented, and the route that
-    /// several shipping dictation keyboards rely on.
-    private func openViaResponderChain(_ url: URL) {
+    /// anything that implements `openURL:`. Undocumented, and no longer
+    /// effective; kept only because it costs nothing to try.
+    private func attemptResponderChain(_ url: URL) {
         var responder: UIResponder? = self
         let selector = sel_registerName("openURL:")
         while let r = responder {
             if r.responds(to: selector) {
                 r.perform(selector, with: url)
-                flash("Opening OpenFlow… (chain)")
                 return
             }
             responder = r.next
         }
-        // Nothing in the chain took it. Say what to do rather than failing mute.
-        status.text = "Open the OpenFlow app once, then this key works from anywhere."
-    }
-
-    /// DIAGNOSTIC: what can a keyboard extension actually do here?
-    ///
-    /// Reports microphone capture, whether the app is reachable in the
-    /// background, and how much memory this extension is holding — the three
-    /// unknowns the architecture depends on, answered in one tap.
-    @objc private func micCheckTapped() {
-        guard hasFullAccess else { status.text = "needs Full Access first"; return }
-        status.text = "testing…"
-        let alive = handoff?.appIsAlive() == true
-        let recorder = AudioRecorder()
-        do {
-            try recorder.start()
-        } catch {
-            status.text = "MIC BLOCKED: \(error.localizedDescription) · app alive: \(alive)"
-            return
-        }
-        DispatchQueue.main.asyncAfter(deadline: .now() + 1.5) { [weak self] in
-            guard let self else { return }
-            let samples = recorder.stop()
-            let peak = samples.reduce(Float(0)) { max($0, abs($1)) }
-            let mem = Self.residentMB()
-            let mic: String
-            if samples.isEmpty { mic = "MIC BLOCKED (no buffers)" }
-            else if peak == 0 { mic = "MIC SILENT (\(samples.count) zeros)" }
-            else { mic = String(format: "MIC OK peak %.3f", peak) }
-            self.status.text = "\(mic) · app alive: \(alive) · mem \(mem)MB"
-        }
-    }
-
-    /// Resident memory of this extension, which is what the jetsam limit
-    /// actually watches.
-    private static func residentMB() -> Int {
-        var info = task_vm_info_data_t()
-        var count = mach_msg_type_number_t(MemoryLayout<task_vm_info_data_t>.size)
-            / mach_msg_type_number_t(MemoryLayout<natural_t>.size)
-        let ok = withUnsafeMutablePointer(to: &info) {
-            $0.withMemoryRebound(to: integer_t.self, capacity: Int(count)) {
-                task_info(mach_task_self_, task_flavor_t(TASK_VM_INFO), $0, &count)
-            }
-        }
-        return ok == KERN_SUCCESS ? Int(info.phys_footprint / 1024 / 1024) : -1
     }
 
     @objc private func deleteTapped() { textDocumentProxy.deleteBackward() }
@@ -231,11 +181,10 @@ final class KeyboardViewController: UIInputViewController {
         globe.addTarget(self, action: #selector(handleInputModeList(from:with:)),
                         for: .allTouchEvents)
         let del = key(systemImage: "delete.left", action: #selector(deleteTapped))
-        let micCheck = key(systemImage: "stethoscope", action: #selector(micCheckTapped))
         let space = key(title: "space", action: #selector(spaceTapped))
         let ret = key(title: "return", action: #selector(returnTapped))
 
-        let bottom = UIStackView(arrangedSubviews: [globe, micCheck, space, del, ret])
+        let bottom = UIStackView(arrangedSubviews: [globe, space, del, ret])
         bottom.axis = .horizontal
         bottom.spacing = 6
         bottom.distribution = .fillProportionally

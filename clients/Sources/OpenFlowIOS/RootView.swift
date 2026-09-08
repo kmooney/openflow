@@ -84,10 +84,18 @@ struct RootView: View {
                     .multilineTextAlignment(.center)
             }
 
+            // Wraps rather than clips: a failure here arrives as an OSStatus
+            // string long enough that a fixed single line hid the only part
+            // that identified it.
             Text(statusLine)
                 .font(.system(size: 12, design: .monospaced))
                 .foregroundStyle(state.isRecording ? .red : .secondary)
-                .frame(height: 16)
+                .multilineTextAlignment(.center)
+                .lineLimit(3)
+                .fixedSize(horizontal: false, vertical: true)
+                .frame(minHeight: 16)
+                .padding(.horizontal, 12)
+                .textSelection(.enabled)
 
             Button(action: state.toggle) {
                 ZStack {

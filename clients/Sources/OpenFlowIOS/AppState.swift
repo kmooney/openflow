@@ -33,8 +33,6 @@ final class AppState: ObservableObject {
     private let handoff: Handoff?
     private var tick: Timer?
     private var stopObserver: NSObjectProtocol?
-    private var startObserver: NSObjectProtocol?
-    private var heartbeat: Timer?
 
     init(engine: DictationEngine, store: Store, models: ModelStore, handoff: Handoff?) {
         self.engine = engine
@@ -56,23 +54,19 @@ final class AppState: ObservableObject {
                 self.finish()
             }
         }
-        // The keyboard can ask us to start, which only works while we are
-        // alive. Whether we stay alive in the background is the other half of
-        // what needs testing.
-        startObserver = Handoff.observeStartRequests { [weak self] in
-            Task { @MainActor in
-                guard let self, !self.isRecording else { return }
-                self.begin()
-            }
-        }
-        // Tell the keyboard we are reachable. It has no way to ask.
-        heartbeat = Timer.scheduledTimer(withTimeInterval: 5, repeats: true) { [weak self] _ in
-            Task { @MainActor in self?.handoff?.beat() }
-        }
-        handoff?.beat()
+        // We are definitionally not recording at launch. Says so explicitly
+        // because the flag lives in a file that outlives the process: a crash
+        // or a kill mid-recording used to leave the keyboard offering "Finish"
+        // until the five-minute staleness window expired.
+        handoff?.setRecording(false)
 
         keyboardReady = handoff?.keyboardIsReady ?? false
         reloadHistory()
+    }
+
+    deinit {
+        tick?.invalidate()
+        if let stopObserver { Handoff.removeObserver(stopObserver) }
     }
 
     var isRecording: Bool { if case .recording = state { return true }; return false }
@@ -82,17 +76,24 @@ final class AppState: ObservableObject {
 
     func begin() {
         UIImpactFeedbackGenerator(style: .medium).impactOccurred()
-        // Tell the keyboard we are live, so its key becomes "finish and
-        // insert" rather than "open the app".
-        handoff?.setRecording(true)
+        // The keyboard is told we are live from `apply`, once the engine has
+        // actually started -- not here. Setting it up front meant a failed
+        // start left the flag stuck at "recording" forever, and the keyboard
+        // offered a Finish button that could never finish.
         engine.begin()
     }
 
     func finish() {
+        // `engine.end` returns early, without ever calling back, when it is not
+        // recording. Reconcile the shared flag here or the keyboard is left
+        // showing a Finish button whose taps disappear into nothing.
+        guard isRecording else {
+            handoff?.setRecording(false)
+            return
+        }
         engine.end { [weak self] result in
             Task { @MainActor in
                 guard let self else { return }
-                self.handoff?.setRecording(false)
                 switch result {
                 case .success(let o):
                     UIPasteboard.general.string = o.text
@@ -115,7 +116,21 @@ final class AppState: ObservableObject {
 
     private func apply(_ s: DictationState) {
         state = s
+        // The one place the keyboard's view of us is written. Derived from the
+        // engine rather than from the caller's intent, so the two processes
+        // cannot disagree about whether a recording is running.
+        handoff?.setRecording(s == .recording)
+        switch s {
+        case .idle:              handoff?.setStatus("idle")
+        case .recording:         handoff?.setStatus("recording")
+        case .thinking:          handoff?.setStatus("transcribing")
+        case .failed(let m):     handoff?.setStatus("could not start: \(m)")
+        }
         if case .recording = s { startTick() } else { stopTick() }
+        // A failed start is worth saying out loud. It used to set the state and
+        // nothing else, which is how a dead microphone looked like a dead
+        // button.
+        if case .failed(let message) = s { status = message }
     }
 
     private func startTick() {
@@ -133,21 +148,6 @@ final class AppState: ObservableObject {
 
     func refresh() {
         stats = store.stats()
-        // The keyboard can ask us to start, which only works while we are
-        // alive. Whether we stay alive in the background is the other half of
-        // what needs testing.
-        startObserver = Handoff.observeStartRequests { [weak self] in
-            Task { @MainActor in
-                guard let self, !self.isRecording else { return }
-                self.begin()
-            }
-        }
-        // Tell the keyboard we are reachable. It has no way to ask.
-        heartbeat = Timer.scheduledTimer(withTimeInterval: 5, repeats: true) { [weak self] _ in
-            Task { @MainActor in self?.handoff?.beat() }
-        }
-        handoff?.beat()
-
         keyboardReady = handoff?.keyboardIsReady ?? false
         reloadHistory()
     }
