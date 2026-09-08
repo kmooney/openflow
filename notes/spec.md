@@ -14,6 +14,10 @@ Status: draft for review. Nothing built yet.
   parameter — built and measured in M0
 - v0.9: **vocabulary biasing** for proper nouns (measured, §5.2), spoken
   **quote-unquote** (§4.5), signature handling (§4.4)
+- v2.6: keyboard drives the whole cycle (background recording + stop channel);
+  Full Access explained rather than stated; fresh audio engine per iOS recording
+- v2.5: **M4 started — iOS app and keyboard extension build**, with the
+  app↔keyboard handoff in the shared Kit (§6.2)
 - v2.4: push-to-talk reconciles against real modifier state (it could stick and
   behave like a toggle); paste waits for the chord to lift (§6.1.5)
 - v2.3: **VPIO abandoned; noise reduction is now ours** — spectral subtraction
@@ -1083,6 +1087,91 @@ Why it must be this way: a keyboard extension can't use the microphone, and app
 extensions run under a hard memory ceiling (tens of MB) that a Whisper model
 would blow through instantly. The app has neither restriction, so the extension
 stays a mic *button* and a text sink. Costs one app-switch animation.
+
+**Built.** `clients/ios/` — XcodeGen from a checked-in `project.yml`, three
+targets (app, keyboard extension, and an `OpenFlowKit` framework built from the
+same sources the macOS app uses). `./build-ios.sh` produces both frameworks and
+the project from nothing.
+
+The handoff is a **file plus a notification, not a notification carrying the
+text**: a Darwin notification has no payload and no delivery guarantee, and the
+keyboard is usually not running when the app finishes. The file is the truth;
+the notification is only an optimisation for when the keyboard happens to be
+alive. So the keyboard checks for pending text **every time it appears**, which
+is what makes the ordinary path — the user switching back by hand — work at all.
+
+**The keyboard's key is a toggle across two processes.** Tap once: the app opens
+and starts recording. Switch back to your own app — recording continues, which
+is why the app declares the `audio` background mode. Tap again: the keyboard
+posts a stop request, the app transcribes in the background, writes the
+transcript, and the keyboard inserts it. The user never returns to OpenFlow to
+finish a recording, which was the point of the whole arrangement.
+
+That needs a **reverse channel**, so the container carries two more things: a
+`session.json` saying whether the app is listening (the keyboard's key has to
+mean "finish" rather than "open the app"), and a second Darwin notification for
+the stop request. The recording flag is treated as stale after five minutes — if
+the app were killed mid-recording it would otherwise stick forever and the key
+would never open the app again.
+
+**"Allow Full Access" has to be explained, not stated.** It is Apple's wording,
+it means nothing to anyone who has not read the developer documentation, and it
+sounds like handing a keyboard the run of your phone. A greyed-out key labelled
+with that phrase is where people give up. So: the keyboard says what the
+permission is *for* and offers to take you there, and the app carries a full
+screen explaining it — what it does, what it does not do, and the exact taps.
+The app detects the state without an API for it: the keyboard writes a marker
+file the instant it can, which is only possible with Full Access, so the
+marker's absence is the signal.
+
+`take()` is one-shot by construction: reading deletes. Inserting the same
+sentence twice into someone's message is a worse failure than missing it once.
+Offers older than three minutes are discarded rather than pasted into whatever
+the user happens to be typing later.
+
+Four things that cost a build each, worth recording:
+
+- **Packaging, not SwiftPM.** SwiftPM refuses `unsafeFlags` in a package used as
+  a dependency, and the macOS build needs them for its static libraries. iOS
+  compiles the same sources into a framework target and links XCFrameworks
+  instead — same code, different packaging.
+- **Xcode's explicitly-built modules will not find a module map from
+  `SWIFT_INCLUDE_PATHS`**; it has to be handed the file with
+  `-Xcc -fmodule-map-file=`, on every target that transitively imports the Kit.
+- **XcodeGen's `info:` block generates the plist and overwrites what is there.**
+  It silently cost the app its URL scheme and microphone usage string, and the
+  keyboard its entire `NSExtension` dictionary — which would have shipped a
+  keyboard that never appears in Settings. All of it now lives in `project.yml`.
+- **Arm64 only.** The Rust core is built for `aarch64-apple-ios-sim`, so an
+  x86_64 simulator slice would have to be built and shipped for nobody.
+
+**The model ships inside the app** (141 MB, 143 MB total). Downloading on first
+run would mean a dictation app that cannot dictate until it has fetched a model
+— broken on a plane, which is exactly where this gets used, and at odds with the
+claim that nothing needs the network.
+
+**iOS bundles `base.en` where macOS uses `small.en`**, and it is a real trade
+rather than an oversight. M0 disqualified base.en as the desktop default because
+it substitutes rather than admitting uncertainty ("uh" became "that"). On a
+phone, 141 MB against 466 MB is the difference between a download people accept
+and one they abandon.
+
+**But it is the user's trade to make, not ours, so the app makes it choosable.**
+`ModelStore` lists the catalogue with real sizes and honest notes — including
+that Large v3 Turbo is the *slowest* for dictation despite being the most
+accurate — and downloads, selects and deletes on demand, reloading the engine
+off the main queue. Shipping one model and a paragraph explaining why it is the
+wrong one for some people was the weaker answer.
+
+Two rules the tests pin down: the bundled model can never be deleted, so there
+is always something to fall back on; and deleting the *active* model moves the
+selection rather than stranding it on a missing file — the first attempt routed
+that through `select()`, which refuses absent models, making the fallback a
+silent no-op.
+
+The remaining platform risk is unchanged and is documented in
+`clients/ios/README.md`: opening the app from the keyboard walks the responder
+chain for `openURL:`, because an extension has no `UIApplication`.
 
 On-device whisper in the app where the phone can carry it (a smaller model than
 the Mac's), server fallback where it can't. Cheap bonus worth shipping: a

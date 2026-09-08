@@ -33,9 +33,11 @@ public final class Store {
     private let queue = DispatchQueue(label: "openflow.store")
 
     public init(path: String) throws {
-        try FileManager.default.createDirectory(
-            atPath: (path as NSString).deletingLastPathComponent,
-            withIntermediateDirectories: true)
+        if path != ":memory:" {
+            try FileManager.default.createDirectory(
+                atPath: (path as NSString).deletingLastPathComponent,
+                withIntermediateDirectories: true)
+        }
         guard sqlite3_open(path, &db) == SQLITE_OK else {
             throw NSError(domain: "openflow.store", code: 1,
                           userInfo: [NSLocalizedDescriptionKey: "could not open \(path)"])
@@ -67,6 +69,14 @@ public final class Store {
     }
 
     deinit { if let db { sqlite3_close(db) } }
+
+    /// Last-resort store so the app can still run when the database cannot be
+    /// opened. History is lost on quit, which is far better than refusing to
+    /// let the user dictate at all.
+    public static func inMemory() -> Store {
+        // ":memory:" cannot fail the way a file path can.
+        try! Store(path: ":memory:")
+    }
 
     private func exec(_ sql: String) {
         sqlite3_exec(db, sql, nil, nil, nil)

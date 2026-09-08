@@ -1,0 +1,152 @@
+name: OpenFlowIOS
+# Apple Silicon only. The Rust core is built for aarch64-apple-ios-sim, so an
+# x86_64 simulator slice would have to be built and shipped for no one.
+settings:
+  ARCHS: arm64
+  EXCLUDED_ARCHS[sdk=iphonesimulator*]: x86_64
+  ONLY_ACTIVE_ARCH: YES
+
+options:
+  bundleIdPrefix: dev.openflow
+  deploymentTarget: { iOS: "17.0" }
+  createIntermediateGroups: true
+
+# The shared Swift lives in ../Sources/OpenFlowKit and is compiled into a
+# framework here rather than consumed as a SwiftPM package: SwiftPM refuses
+# `unsafeFlags` in a package used as a dependency, and the macOS build needs
+# them for its static libraries. Same sources, different packaging.
+targets:
+  OpenFlowKit:
+    type: framework
+    platform: iOS
+    sources:
+      - path: ../Sources/OpenFlowKit
+    info:
+      path: OpenFlowKit-Info.plist
+      properties:
+        CFBundleName: OpenFlowKit
+    dependencies:
+      - framework: ../Frameworks/OpenFlowFFI.xcframework
+        embed: false
+      # Linked here, embedded by the app target below: it is a *dynamic*
+      # framework, and linking without embedding produces an app that builds
+      # cleanly and dies at launch with "Library missing".
+      - framework: ../Frameworks/whisper.xcframework
+        embed: false
+      - sdk: AVFoundation.framework
+      - sdk: Accelerate.framework
+      - sdk: libsqlite3.tbd
+      - sdk: libc++.tbd
+    settings:
+      PRODUCT_BUNDLE_IDENTIFIER: dev.openflow.ios.kit
+      # Where `import CWhisper` / `import COpenFlow` resolve from. The module
+      # maps are shared with the macOS package build.
+      # Xcode's explicitly-built modules will not discover a module map from
+      # SWIFT_INCLUDE_PATHS alone; it has to be handed the file. Applied to
+      # every target, because importing OpenFlowKit pulls its module
+      # dependencies in transitively.
+      OTHER_SWIFT_FLAGS: -Xcc -fmodule-map-file=$(SRCROOT)/../Sources/CWhisper/module.modulemap -Xcc -fmodule-map-file=$(SRCROOT)/../Sources/COpenFlow/module.modulemap -Xcc -I$(SRCROOT)/../Sources/CWhisper/include -Xcc -I$(SRCROOT)/../Sources/COpenFlow/include
+      HEADER_SEARCH_PATHS: $(SRCROOT)/../Sources/CWhisper/include $(SRCROOT)/../Sources/COpenFlow/include
+      DEFINES_MODULE: YES
+      SWIFT_VERSION: "5.9"
+      MARKETING_VERSION: "0.1.0"
+      CURRENT_PROJECT_VERSION: "1"
+
+  OpenFlow:
+    type: application
+    platform: iOS
+    sources:
+      - path: ../Sources/OpenFlowIOS
+      - path: Resources
+        optional: true
+        buildPhase: resources
+    # Declared here, not in a checked-in plist: XcodeGen *generates* the file
+    # at `info.path` and silently overwrites whatever was there, which quietly
+    # cost the app its URL scheme and microphone usage string.
+    info:
+      path: OpenFlow-Info.plist
+      properties:
+        CFBundleDisplayName: OpenFlow
+        UILaunchScreen: {}
+        # The app's only network use is HTTPS model downloads, which is exempt.
+        # Declaring it here avoids being asked on every TestFlight upload.
+        ITSAppUsesNonExemptEncryption: false
+        # Recording continues while the user is back in their own app, so the
+        # keyboard's key can end it from there. Without this iOS suspends the
+        # app the moment it leaves the foreground and the recording dies
+        # mid-sentence.
+        UIBackgroundModes: [audio]
+        NSMicrophoneUsageDescription: >-
+          OpenFlow transcribes your speech on this device. Audio is never
+          uploaded and is discarded after transcription.
+        CFBundleURLTypes:
+          - CFBundleURLName: dev.openflow
+            CFBundleURLSchemes: [openflow]
+        UISupportedInterfaceOrientations:
+          - UIInterfaceOrientationPortrait
+          - UIInterfaceOrientationLandscapeLeft
+          - UIInterfaceOrientationLandscapeRight
+    entitlements:
+      path: OpenFlow.entitlements
+    dependencies:
+      - target: OpenFlowKit
+        embed: true
+      - target: OpenFlowKeyboard
+        embed: true
+      # The app owns the Frameworks directory; the extension loads from it too.
+      - framework: ../Frameworks/whisper.xcframework
+        embed: true
+        codeSign: true
+    settings:
+      PRODUCT_BUNDLE_IDENTIFIER: dev.openflow.ios
+      # Xcode's explicitly-built modules will not discover a module map from
+      # SWIFT_INCLUDE_PATHS alone; it has to be handed the file. Applied to
+      # every target, because importing OpenFlowKit pulls its module
+      # dependencies in transitively.
+      OTHER_SWIFT_FLAGS: -Xcc -fmodule-map-file=$(SRCROOT)/../Sources/CWhisper/module.modulemap -Xcc -fmodule-map-file=$(SRCROOT)/../Sources/COpenFlow/module.modulemap -Xcc -I$(SRCROOT)/../Sources/CWhisper/include -Xcc -I$(SRCROOT)/../Sources/COpenFlow/include
+      HEADER_SEARCH_PATHS: $(SRCROOT)/../Sources/CWhisper/include $(SRCROOT)/../Sources/COpenFlow/include
+      MARKETING_VERSION: "0.1.0"
+      CURRENT_PROJECT_VERSION: "1"
+      SWIFT_VERSION: "5.9"
+
+  OpenFlowKeyboard:
+    type: app-extension
+    platform: iOS
+    sources:
+      - path: ../Sources/OpenFlowKeyboard
+    info:
+      path: Keyboard-Info.plist
+      properties:
+        CFBundleDisplayName: OpenFlow Keyboard
+        NSExtension:
+          NSExtensionPointIdentifier: com.apple.keyboard-service
+          NSExtensionPrincipalClass: $(PRODUCT_MODULE_NAME).KeyboardViewController
+          NSExtensionAttributes:
+            IsASCIICapable: false
+            PrefersRightToLeft: false
+            PrimaryLanguage: en-US
+            # Without Full Access the App Group container resolves to nil, and
+            # the App Group container IS the handoff mechanism.
+            RequestsOpenAccess: true
+    entitlements:
+      path: Keyboard.entitlements
+    dependencies:
+      - target: OpenFlowKit
+        embed: false
+    settings:
+      PRODUCT_BUNDLE_IDENTIFIER: dev.openflow.ios.keyboard
+      # Xcode's explicitly-built modules will not discover a module map from
+      # SWIFT_INCLUDE_PATHS alone; it has to be handed the file. Applied to
+      # every target, because importing OpenFlowKit pulls its module
+      # dependencies in transitively.
+      OTHER_SWIFT_FLAGS: -Xcc -fmodule-map-file=$(SRCROOT)/../Sources/CWhisper/module.modulemap -Xcc -fmodule-map-file=$(SRCROOT)/../Sources/COpenFlow/module.modulemap -Xcc -I$(SRCROOT)/../Sources/CWhisper/include -Xcc -I$(SRCROOT)/../Sources/COpenFlow/include
+      HEADER_SEARCH_PATHS: $(SRCROOT)/../Sources/CWhisper/include $(SRCROOT)/../Sources/COpenFlow/include
+      MARKETING_VERSION: "0.1.0"
+      CURRENT_PROJECT_VERSION: "1"
+      SWIFT_VERSION: "5.9"
+
+schemes:
+  OpenFlow:
+    build:
+      targets: { OpenFlow: all }
+    run: { config: Debug }

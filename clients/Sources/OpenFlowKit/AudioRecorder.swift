@@ -54,9 +54,18 @@ public final class AudioRecorder {
         lock.unlock()
 
         #if os(iOS)
+        // Rebuild every time on iOS. After a session deactivation the input
+        // node's format goes invalid, so a reused engine starts and quietly
+        // captures nothing -- which is exactly what "the first recording works
+        // and the second does not" looks like.
+        rebuildEngine()
+
         let session = AVAudioSession.sharedInstance()
-        try session.setCategory(.record, mode: .measurement, options: [.duckOthers])
-        try session.setActive(true)
+        // .playAndRecord with .mixWithOthers so recording can continue while
+        // the user is in another app (the keyboard hand-back flow).
+        try session.setCategory(.playAndRecord, mode: .measurement,
+                                options: [.duckOthers, .allowBluetooth, .defaultToSpeaker])
+        try session.setActive(true, options: [])
         #endif
 
         // Switching voice processing needs a clean graph: turning it back off
@@ -149,7 +158,10 @@ public final class AudioRecorder {
         engine.stop()
         isRecording = false
         #if os(iOS)
-        try? AVAudioSession.sharedInstance().setActive(false)
+        // Let other audio resume, but do not tear the session down harder than
+        // necessary -- the next start rebuilds the engine anyway.
+        try? AVAudioSession.sharedInstance()
+            .setActive(false, options: [.notifyOthersOnDeactivation])
         #endif
         lock.lock(); defer { lock.unlock() }
         // A digitally-silent capture is never a real recording -- even a quiet

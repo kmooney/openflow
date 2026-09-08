@@ -23,7 +23,7 @@ public final class DictationEngine {
     private let recorder = AudioRecorder()
     private let store: Store
     private var transcriber: Transcriber?
-    private let modelPath: String
+    private var modelPath: String
     private let work = DispatchQueue(label: "openflow.dictation", qos: .userInitiated)
 
     public var tone: Tone = .formal
@@ -52,6 +52,19 @@ public final class DictationEngine {
         self.modelPath = modelPath
         self.store = store
     }
+
+    /// Switch to a different model. The old one is dropped and the new one
+    /// loaded off the main queue, so the UI does not stall on a 500 MB file.
+    public func useModel(at path: String) {
+        guard path != modelPath else { return }
+        work.async { [self] in
+            transcriber = nil            // free the old weights before loading
+            modelPath = path
+            transcriber = Transcriber(modelPath: path)
+        }
+    }
+
+    public var currentModelPath: String { modelPath }
 
     /// Load the model once, up front. It costs ~150ms and the user should
     /// never pay it mid-utterance.

@@ -10,6 +10,13 @@ public final class Transcriber {
     public init?(modelPath: String, useGPU: Bool = true) {
         var cp = whisper_context_default_params()
         cp.use_gpu = useGPU
+        #if targetEnvironment(simulator)
+        // The simulator's Metal support is not what ggml expects; asking for
+        // the GPU there fails or falls back unpredictably. CPU is slower but
+        // it actually runs, and the simulator is for checking behaviour rather
+        // than measuring speed.
+        cp.use_gpu = false
+        #endif
         guard let c = whisper_init_from_file_with_params(modelPath, cp) else { return nil }
         self.ctx = c
         self.modelPath = modelPath
