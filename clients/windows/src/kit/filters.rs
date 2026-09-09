@@ -112,9 +112,18 @@ impl SpeechVerdict {
 
 /// Anything at or above this frame energy is loud enough to be speech, and is
 /// accepted regardless of dynamics.
-pub const SPEECH_LEVEL: f32 = 0.030;
+pub const SPEECH_LEVEL: f32 = 0.012;
 /// Below this, treat as silence whatever the dynamics say.
-pub const SILENCE_LEVEL: f32 = 0.006;
+///
+/// These were 0.030 and 0.006, and both were too high by roughly 20 dB. Kept
+/// identical to the Swift clients on purpose: measured on an iPhone, where a
+/// normal speaking voice arrives around -38 dBFS peak, the old values rejected
+/// five seconds of real speech as "heard nothing" with the microphone working
+/// perfectly. A desktop captures louder than a phone, so the old numbers were
+/// never *wrong* here — but they are guards, the dynamic-range test below does
+/// the actual discrimination, and there is no reason for a guard to sit inside
+/// the signal on any platform.
+pub const SILENCE_LEVEL: f32 = 0.0015;
 /// Only used to reject in the band between the two levels above.
 pub const MIN_DYNAMIC_RATIO: f32 = 1.5;
 
