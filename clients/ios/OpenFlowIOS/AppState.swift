@@ -43,6 +43,9 @@ final class AppState: ObservableObject {
     private let handoff: Handoff?
     private let liveActivity = LiveActivityController()
     private let voiceProcessingFailedKey = "voiceProcessingFailed"
+    /// When a recording last started, finished or was discarded. Drives the
+    /// idle timeout — see `MicrophoneIdlePolicy`.
+    private var lastActivity = Date()
     private var tick: Timer?
     private var heartbeat: Timer?
     /// Darwin notification tokens (the keyboard's requests).
@@ -222,6 +225,11 @@ final class AppState: ObservableObject {
         }
         liveActivity.start(recording: false)
         showSwipeHint = true
+        // Opening is itself activity. Without this the idle clock would still
+        // be running from whenever a recording last ended — so a session opened
+        // after a quiet spell would close on its first heartbeat, before the
+        // user had said a word.
+        lastActivity = Date()
         return true
     }
 
@@ -353,6 +361,10 @@ final class AppState: ObservableObject {
 
     private func apply(_ s: DictationState) {
         state = s
+        // Hooked here rather than at each call site: `apply` is the one funnel
+        // every state change passes through, so a new way to start a recording
+        // cannot forget to mark the session as in use.
+        if s == .recording || s == .thinking { lastActivity = Date() }
         publishMicState()
         switch s {
         case .idle:              handoff?.setStatus("idle")
@@ -431,11 +443,32 @@ final class AppState: ObservableObject {
     private func startHeartbeat() {
         guard heartbeat == nil else { return }
         heartbeat = Timer.scheduledTimer(withTimeInterval: 5, repeats: true) { [weak self] _ in
-            Task { @MainActor in self?.handoff?.heartbeat() }
+            Task { @MainActor in
+                guard let self else { return }
+                self.handoff?.heartbeat()
+                self.closeMicrophoneIfIdle()
+            }
         }
     }
 
     private func stopHeartbeat() { heartbeat?.invalidate(); heartbeat = nil }
+
+    /// Put an unused microphone away. Rides the heartbeat rather than adding a
+    /// second timer: the heartbeat already runs exactly when a session is open,
+    /// which is exactly when this question is worth asking.
+    private func closeMicrophoneIfIdle() {
+        guard isLive else { return }
+        guard MicrophoneIdlePolicy.shouldClose(lastActivity: lastActivity,
+                                               isRecording: isRecording,
+                                               isThinking: isThinking) else { return }
+        NSLog("openflow: closing the microphone after %.0f minutes idle",
+              MicrophoneIdlePolicy.timeout / 60)
+        endSession()
+        // Said plainly, because the indicator going out is the visible part and
+        // the reason for it is not.
+        status = "Microphone closed after \(Int(MicrophoneIdlePolicy.timeout / 60)) minutes idle."
+        handoff?.setStatus("closed — idle")
+    }
 
     func refresh() {
         stats = store.stats()

@@ -259,3 +259,49 @@ extension HandoffTests {
         XCTAssertEqual(handoff.take()?.text, "meet me at noon")
     }
 }
+
+// MARK: - putting an unused microphone away
+//
+// Holding the microphone open is what lets the keyboard start a recording from
+// another app, and the price is the recording indicator lit for the whole
+// session. Worth paying while someone is dictating; worth nothing once they
+// have stopped.
+
+final class MicrophoneIdlePolicyTests: XCTestCase {
+
+    private func idle(_ seconds: TimeInterval) -> Date {
+        Date().addingTimeInterval(-seconds)
+    }
+
+    func testFreshSessionStaysOpen() {
+        XCTAssertFalse(MicrophoneIdlePolicy.shouldClose(
+            lastActivity: idle(10), isRecording: false, isThinking: false))
+    }
+
+    func testIdleSessionCloses() {
+        XCTAssertTrue(MicrophoneIdlePolicy.shouldClose(
+            lastActivity: idle(MicrophoneIdlePolicy.timeout + 1),
+            isRecording: false, isThinking: false))
+    }
+
+    /// Never mid-utterance. A long dictation is not an idle session, however
+    /// long it has been since the last one finished.
+    func testNeverClosesWhileRecording() {
+        XCTAssertFalse(MicrophoneIdlePolicy.shouldClose(
+            lastActivity: idle(3600), isRecording: true, isThinking: false))
+    }
+
+    /// Never with a transcription in flight: the audio is already captured and
+    /// the result is still owed to the user.
+    func testNeverClosesWhileTranscribing() {
+        XCTAssertFalse(MicrophoneIdlePolicy.shouldClose(
+            lastActivity: idle(3600), isRecording: false, isThinking: true))
+    }
+
+    func testBoundaryIsInclusive() {
+        let now = Date()
+        XCTAssertTrue(MicrophoneIdlePolicy.shouldClose(
+            lastActivity: now.addingTimeInterval(-MicrophoneIdlePolicy.timeout),
+            now: now, isRecording: false, isThinking: false))
+    }
+}
