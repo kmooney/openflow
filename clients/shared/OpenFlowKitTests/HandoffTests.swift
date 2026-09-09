@@ -192,3 +192,70 @@ extension HandoffTests {
         wait(for: [start, stop], timeout: 2)
     }
 }
+
+// MARK: - which keyboard inserts
+//
+// `take()` deletes on read, so exactly one keyboard instance may call it. iOS
+// keeps instances alive across host apps and every one of them observes the
+// transcript notification — a stale one waking first destroyed the transcript
+// by inserting it into a text proxy that went nowhere.
+
+extension HandoffTests {
+
+    /// The hazard the timestamp exists to prevent: the claim is a file that
+    /// outlives every process, so a claim nobody is refreshing must not refuse
+    /// the visible keyboard forever.
+    func testAbandonedClaimFailsOpen() throws {
+        let (handoff, dir) = try makeHandoff()
+        defer { try? FileManager.default.removeItem(at: dir) }
+
+        let stale = Date().timeIntervalSince1970 - (Handoff.claimTimeout + 10)
+        try Data("\(stale)|gone-for-good".utf8)
+            .write(to: dir.appendingPathComponent("keyboard-claim"))
+
+        XCTAssertTrue(handoff.isCurrentKeyboard("visible"),
+                      "a claim nobody is keeping alive must not block insertion")
+    }
+
+    func testUnreadableClaimFailsOpen() throws {
+        let (handoff, dir) = try makeHandoff()
+        defer { try? FileManager.default.removeItem(at: dir) }
+
+        try Data("garbage".utf8).write(to: dir.appendingPathComponent("keyboard-claim"))
+        XCTAssertTrue(handoff.isCurrentKeyboard("visible"))
+    }
+
+    func testNobodyHasClaimedYet() throws {
+        let (handoff, dir) = try makeHandoff()
+        defer { try? FileManager.default.removeItem(at: dir) }
+
+        XCTAssertTrue(handoff.isCurrentKeyboard("anyone"),
+                      "with no claim on disk a first run must still insert")
+    }
+
+    func testMostRecentClaimWins() throws {
+        let (handoff, dir) = try makeHandoff()
+        defer { try? FileManager.default.removeItem(at: dir) }
+
+        handoff.claimKeyboard("stale-instance")
+        handoff.claimKeyboard("visible-instance")
+
+        XCTAssertTrue(handoff.isCurrentKeyboard("visible-instance"))
+        XCTAssertFalse(handoff.isCurrentKeyboard("stale-instance"),
+                       "a leftover instance must not be allowed to consume the transcript")
+    }
+
+    /// The failure this prevents, spelled out: the stale instance is refused,
+    /// so the transcript is still there for the visible one.
+    func testStaleInstanceCannotDestroyTheTranscript() throws {
+        let (handoff, dir) = try makeHandoff()
+        defer { try? FileManager.default.removeItem(at: dir) }
+
+        handoff.claimKeyboard("visible")
+        try handoff.offer("meet me at noon", tone: .formal)
+
+        if handoff.isCurrentKeyboard("stale") { _ = handoff.take() }
+        XCTAssertTrue(handoff.hasPending, "the stale instance must not have taken it")
+        XCTAssertEqual(handoff.take()?.text, "meet me at noon")
+    }
+}

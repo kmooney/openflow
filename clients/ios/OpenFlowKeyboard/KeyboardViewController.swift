@@ -45,6 +45,24 @@ final class KeyboardViewController: UIInputViewController {
     private var pendingRequest: (kind: Awaiting, label: String, symbol: String,
                                  since: Date, until: Date)?
 
+    /// Whether this instance is the keyboard actually on screen.
+    ///
+    /// iOS keeps keyboard extension instances alive across host apps, and the
+    /// transcript observer below lives as long as the instance — not as long as
+    /// it is visible. So an instance left over from an app used earlier would
+    /// wake on the notification, `take()` the transcript (which deletes it),
+    /// and insert into its own dead `textDocumentProxy`. The keyboard the user
+    /// was looking at then found nothing waiting, and the text existed only in
+    /// the app's history.
+    ///
+    /// `take()` is one-shot by design, so exactly one instance may be allowed
+    /// to call it: the visible one.
+    private var isVisible = false
+
+    /// Identifies this instance among however many iOS is keeping alive. Only
+    /// the instance that most recently appeared may consume a transcript.
+    private let instanceToken = UUID().uuidString
+
     override func viewDidLoad() {
         super.viewDidLoad()
         handoff = Handoff(appGroup: OpenFlowIDs.appGroup)
@@ -70,6 +88,9 @@ final class KeyboardViewController: UIInputViewController {
 
     override func viewWillAppear(_ animated: Bool) {
         super.viewWillAppear(animated)
+        isVisible = true
+        lastClaim = Date()
+        handoff?.claimKeyboard(instanceToken)
         refreshState()
         insertPendingIfAny()
         startPolling()
@@ -77,6 +98,7 @@ final class KeyboardViewController: UIInputViewController {
 
     override func viewWillDisappear(_ animated: Bool) {
         super.viewWillDisappear(animated)
+        isVisible = false
         stopPolling()
     }
 
@@ -86,8 +108,21 @@ final class KeyboardViewController: UIInputViewController {
     private func startPolling() {
         stopPolling()
         poll = Timer.scheduledTimer(withTimeInterval: 0.25, repeats: true) { [weak self] _ in
-            self?.refreshState()
+            guard let self else { return }
+            self.refreshClaim()
+            self.refreshState()
         }
+    }
+
+    /// Keep this instance's claim alive while it is on screen, so a claim left
+    /// by an instance that never came back ages out instead of blocking
+    /// insertion forever. Throttled: the poll runs four times a second and this
+    /// does not need to.
+    private var lastClaim = Date.distantPast
+    private func refreshClaim() {
+        guard isVisible, Date().timeIntervalSince(lastClaim) > 1 else { return }
+        lastClaim = Date()
+        handoff?.claimKeyboard(instanceToken)
     }
 
     private func stopPolling() { poll?.invalidate(); poll = nil }
@@ -96,6 +131,15 @@ final class KeyboardViewController: UIInputViewController {
 
     private func insertPendingIfAny() {
         guard hasFullAccess else { return }
+        // Never consume on behalf of a keyboard nobody can see. An off-screen
+        // instance that takes the transcript destroys it: reading deletes, and
+        // its text proxy goes nowhere. The visible instance picks it up on the
+        // notification, or on its next `viewWillAppear` if it was not running
+        // when the notification fired.
+        guard isVisible else { return }
+        // Belt and braces: an abandoned instance may never be told it
+        // disappeared, so being on screen is claimed rather than assumed.
+        guard handoff?.isCurrentKeyboard(instanceToken) == true else { return }
         guard let pending = handoff?.take() else { return }
         textDocumentProxy.insertText(pending.text)
         pendingRequest = nil
