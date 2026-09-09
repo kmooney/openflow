@@ -258,6 +258,50 @@ public struct Handoff {
         Self.postNotification()
     }
 
+    // MARK: - which keyboard is live
+    //
+    // iOS keeps keyboard extension instances alive across host apps, and every
+    // one of them observes the transcript notification. Since `take()` deletes
+    // on read, a stale instance that wakes first destroys the transcript by
+    // inserting it into a text proxy that goes nowhere.
+    //
+    // `isVisible` alone is not enough to prevent that: an abandoned instance is
+    // not guaranteed to be told it disappeared. So the keyboard that comes on
+    // screen *claims* insertion, and the claim is what `take()` is gated on —
+    // whoever appeared most recently is the one the user is looking at.
+
+    private var claimURL: URL { directory.appendingPathComponent("keyboard-claim") }
+
+    /// How long a claim is believed. A visible keyboard refreshes well inside
+    /// this; nothing else refreshes at all.
+    public static let claimTimeout: TimeInterval = 5
+
+    /// Called by a keyboard as it comes on screen, and refreshed while it stays
+    /// there. The timestamp is the whole safety mechanism — see below.
+    public func claimKeyboard(_ token: String) {
+        try? Data("\(Date().timeIntervalSince1970)|\(token)".utf8)
+            .write(to: claimURL, options: .atomic)
+    }
+
+    /// May this instance consume a transcript?
+    ///
+    /// **Fails open, deliberately.** The first version answered no unless the
+    /// token matched exactly, and the claim is a file in a container that
+    /// outlives every process that writes it. A claim left behind by an
+    /// instance that never came back would then refuse the visible keyboard
+    /// forever: an intermittent lost transcript traded for a permanent one.
+    ///
+    /// So a claim only counts while it is being kept alive. No claim, an
+    /// unreadable one, or one nobody has refreshed inside `claimTimeout` all
+    /// mean "nobody is holding this" and anyone may insert.
+    public func isCurrentKeyboard(_ token: String) -> Bool {
+        guard let raw = try? String(contentsOf: claimURL, encoding: .utf8) else { return true }
+        let parts = raw.split(separator: "|", maxSplits: 1)
+        guard parts.count == 2, let stamp = TimeInterval(parts[0]) else { return true }
+        guard Date().timeIntervalSince1970 - stamp < Self.claimTimeout else { return true }
+        return parts[1] == token
+    }
+
     /// Take the pending transcript, if any, and remove it.
     ///
     /// One-shot by construction: reading deletes. The keyboard is asked for

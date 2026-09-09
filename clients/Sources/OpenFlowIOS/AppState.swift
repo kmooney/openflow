@@ -291,10 +291,23 @@ final class AppState: ObservableObject {
             // Offer it to the keyboard whether or not we were launched
             // by it: the user may switch to a text field afterwards,
             // and the offer expires on its own if unused.
-            try? handoff?.offer(o.text, tone: tone)
-            status = isLive
-                ? "\(o.result.spokenWords) words · inserted"
-                : "\(o.result.spokenWords) words · copied"
+            //
+            // Not `try?`. If this write fails the transcript exists in history
+            // and nowhere the keyboard can reach, which looks from the outside
+            // exactly like a recording that worked and then vanished — the
+            // clipboard copy above is the only thing standing between the user
+            // and losing it, so say so.
+            do {
+                try handoff?.offer(o.text, tone: tone)
+                status = isLive
+                    ? "\(o.result.spokenWords) words · inserted"
+                    : "\(o.result.spokenWords) words · copied"
+            } catch {
+                NSLog("openflow: could not offer the transcript to the keyboard: %@",
+                      error.localizedDescription)
+                status = "Transcribed, but the keyboard could not be handed the text — it is on the clipboard."
+                handoff?.setFailure("could not hand over the text — it is on the clipboard")
+            }
             UINotificationFeedbackGenerator().notificationOccurred(.success)
         case .failure(let e):
             status = e.localizedDescription
