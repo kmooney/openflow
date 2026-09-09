@@ -2,7 +2,21 @@ import Foundation
 import AVFoundation
 
 /// Microphone capture, resampled to the 16 kHz mono float whisper expects.
-/// Cross-platform: the only divergence is the iOS audio session.
+///
+/// Two states, and the distinction is the whole design on iOS:
+///
+/// - **live** — the audio session is active and the engine is running, with a
+///   tap installed. The system microphone indicator is lit. Buffers arrive and
+///   are thrown away.
+/// - **recording** — the same graph, with the buffers kept.
+///
+/// Nothing is *started* when a recording begins; a flag is flipped. That is
+/// what makes it possible for the keyboard extension to begin a recording
+/// while the app sits in the background, which iOS otherwise forbids outright
+/// (see `open()`).
+///
+/// macOS leaves `keepSessionOpen` false and gets the old behaviour: the graph
+/// comes up for a recording and goes away after it.
 public final class AudioRecorder {
     /// Rebuilt whenever voice processing is switched, because switching it
     /// back off does NOT restore the input node: the node stays reconfigured
@@ -20,9 +34,20 @@ public final class AudioRecorder {
     private var samples: [Float] = []
     private let lock = NSLock()          // the tap runs on the audio thread
     private var highPass = HighPassFilter()
+
+    /// Session active, engine running, microphone indicator lit.
+    public private(set) var isLive = false
+    /// Keeping what the tap delivers, rather than discarding it.
     public private(set) var isRecording = false
     /// True when the OS voice-processing unit is actually engaged.
     public private(set) var noiseSuppressionActive = false
+
+    /// Hold the graph open between recordings. Set by iOS, where a
+    /// backgrounded app cannot start capturing but *can* continue one it
+    /// already has — so it never stops. Costs the microphone indicator being
+    /// lit for as long as the session is open, which is the honest price and
+    /// exactly what the user is agreeing to when they open it.
+    public var keepSessionOpen = false
 
     /// Apple's voice-processing I/O unit: echo cancellation, noise suppression
     /// and AGC, the same stack FaceTime uses.
@@ -37,52 +62,97 @@ public final class AudioRecorder {
     /// High-pass the captured audio to strip low-frequency rumble.
     public var useHighPass = true
 
-    public init() {}
+    /// The graph came up or went away underneath us. Argument is the new value
+    /// of `isLive`. An open session can be taken away by a phone call or a
+    /// media-services reset, and the keyboard is showing UI that claims
+    /// otherwise, so this cannot be silent.
+    public var onLiveChange: (@Sendable (Bool) -> Void)?
+
+    #if os(iOS)
+    private var observers: [NSObjectProtocol] = []
+    #endif
+
+    public init() {
+        #if os(iOS)
+        observeSessionEvents()
+        #endif
+    }
+
+    deinit {
+        #if os(iOS)
+        for o in observers { NotificationCenter.default.removeObserver(o) }
+        #endif
+    }
 
     public enum RecorderError: Error, LocalizedError {
         case noConverter
-        public var errorDescription: String? { "could not configure audio conversion" }
+        case notLive
+        public var errorDescription: String? {
+            switch self {
+            case .noConverter: return "could not configure audio conversion"
+            case .notLive:     return "the microphone is not open"
+            }
+        }
     }
 
-    public func start() throws {
-        guard !isRecording else { return }
-        lock.lock()
-        samples.removeAll(keepingCapacity: true)
-        _conversionFailures = 0
-        peak = 0
-        sawSignal = false
-        lock.unlock()
+    // MARK: - the live session
+
+    /// Bring the capture graph up and leave it running.
+    ///
+    /// **Foreground only on iOS.** A backgrounded app cannot begin capturing:
+    /// not the activation (OSStatus 560557684, `'!int'`) and not the engine
+    /// either (2003329396, `'what'`) even against a healthy active session
+    /// with the microphone routed and a valid format. Everything downstream of
+    /// this — the keyboard starting a recording from inside another app —
+    /// works only because the graph opened here never stops.
+    public func open() throws {
+        guard !isLive else { return }
 
         #if os(iOS)
-        // Rebuild every time on iOS. After a session deactivation the input
-        // node's format goes invalid, so a reused engine starts and quietly
-        // captures nothing -- which is exactly what "the first recording works
-        // and the second does not" looks like.
-        rebuildEngine()
-
-        // Exclusive `.playAndRecord` in `.measurement` mode: measurement
-        // suppresses the system processing that would otherwise colour what
-        // whisper hears.
-        //
-        // This only ever runs in the foreground. iOS refuses to let a
-        // backgrounded app begin capture at all -- not the activation
-        // (OSStatus 560557684, '!int') and not the engine either (2003329396,
-        // 'what') even against a healthy active session with the microphone
-        // routed and a valid format. That measurement is why dictation starts
-        // in the app and the keyboard only ends it.
+        // `.mixWithOthers`, not `.duckOthers`. A session that stays open for
+        // the length of a work session must not hold someone's music down for
+        // all of it, and mixing also stops other audio from interrupting us —
+        // which for an always-on session matters more than a clean capture
+        // while music happens to be playing.
         let session = AVAudioSession.sharedInstance()
         try session.setCategory(.playAndRecord, mode: .measurement,
-                                options: [.duckOthers, .allowBluetooth,
+                                options: [.mixWithOthers, .allowBluetooth,
                                           .defaultToSpeaker])
         try session.setActive(true, options: [])
         #endif
 
-        // Switching voice processing needs a clean graph: turning it back off
-        // does not restore the input node, so a stale engine keeps delivering
-        // nothing. Must happen before `inputNode` is captured.
-        if configuredVoiceProcessing != useVoiceProcessing {
-            rebuildEngine()
+        try startGraph()
+        try startEngine()
+        isLive = true
+        onLiveChange?(true)
+    }
+
+    /// Put the microphone away: graph down, session deactivated, indicator off.
+    public func close() {
+        guard isLive || engine.isRunning else { return }
+        stopGraph()
+        isRecording = false
+        #if os(iOS)
+        // Deactivating IS allowed from the background — it is only starting
+        // that iOS refuses — so the keyboard can end a session from inside
+        // another app.
+        try? AVAudioSession.sharedInstance()
+            .setActive(false, options: [.notifyOthersOnDeactivation])
+        #endif
+        if isLive {
+            isLive = false
+            onLiveChange?(false)
         }
+    }
+
+    /// Build and start the engine against whatever session is current.
+    /// Assumes the session is already active on iOS.
+    private func startGraph() throws {
+        // Rebuild every time. After a session deactivation the input node's
+        // format goes invalid, so a reused engine starts and quietly captures
+        // nothing -- which is exactly what "the first recording works and the
+        // second does not" looks like.
+        rebuildEngine()
 
         noiseSuppressionActive = false
         if useVoiceProcessing {
@@ -97,8 +167,6 @@ public final class AudioRecorder {
                 // mixer auto-connects to the output), and muting the mixer
                 // stops it being fed back to the speakers.
                 //
-                // The earlier attempt connected mainMixer -> output, which is
-                // the wrong pair and failed with -10875.
                 // format: nil -- the node's format is not valid until the
                 // engine starts, and passing an invalid one is a hard crash
                 // (IsFormatSampleRateAndChannelCountValid), not an error.
@@ -112,11 +180,17 @@ public final class AudioRecorder {
         }
         configuredVoiceProcessing = useVoiceProcessing
 
+        installTapAndStart()
+    }
+
+    private func installTapAndStart() {
         // Read AFTER any rebuild: enabling voice processing can change the
         // input node's format, and a rebuild replaces the node entirely.
         let input = engine.inputNode
 
+        lock.lock()
         highPass = HighPassFilter()
+        lock.unlock()
         converter = nil
         converterInputFormat = nil
 
@@ -131,6 +205,11 @@ public final class AudioRecorder {
             self?.append(buf)
         }
         engine.prepare()
+    }
+
+    /// The graph is up but the tap has not been started yet; this is the part
+    /// that can fail, and the part that falls back.
+    private func startEngine() throws {
         do {
             try engine.start()
         } catch {
@@ -146,41 +225,73 @@ public final class AudioRecorder {
             rebuildEngine()
             useVoiceProcessing = false
             noiseSuppressionActive = false
-            highPass = HighPassFilter()
-            converter = nil
-            converterInputFormat = nil
-            engine.inputNode.installTap(onBus: 0, bufferSize: 4096, format: nil) {
-                [weak self] buf, _ in self?.append(buf)
-            }
-            engine.prepare()
+            installTapAndStart()
             try engine.start()
             configuredVoiceProcessing = false
         }
-        isRecording = true
+    }
+
+    private func stopGraph() {
+        if engine.isRunning { engine.stop() }
+        engine.inputNode.removeTap(onBus: 0)
+    }
+
+    // MARK: - recording
+
+    /// Begin keeping what the microphone delivers.
+    ///
+    /// When the session is already live this touches no CoreAudio object at
+    /// all — which is the only reason it can be called from the background.
+    public func start() throws {
+        guard !isRecording else { return }
+
+        if !isLive {
+            try open()
+        } else if !engine.isRunning || configuredVoiceProcessing != useVoiceProcessing {
+            // Either the engine died under us (a configuration change we did
+            // not catch) or the voice-processing setting moved — which needs a
+            // clean graph, because turning it back off does not restore the
+            // input node.
+            //
+            // Rebuilt *in place*, against the session that is already active.
+            // Deliberately not a close-and-reopen: reopening needs the
+            // foreground, and this can run while the user is in another app
+            // with only the keyboard on screen.
+            try startGraph()
+            try startEngine()
+        }
+
+        lock.lock()
+        samples.removeAll(keepingCapacity: true)
+        _conversionFailures = 0
+        peak = 0
+        sawSignal = false
+        highPass = HighPassFilter()
+        isRecording = true          // set under the lock: the tap reads it
+        lock.unlock()
     }
 
     /// Set when a capture came back completely silent while voice processing
     /// was on. The caller uses this to fall back rather than silently failing.
     public private(set) var lastCaptureWasSilent = false
 
-    /// Stop and hand back everything captured.
+    /// Stop keeping audio and hand back everything captured. The graph stays
+    /// up when `keepSessionOpen` is set, so the next `start()` needs nothing
+    /// from the foreground.
     @discardableResult
     public func stop() -> [Float] {
         guard isRecording else { return [] }
-        engine.inputNode.removeTap(onBus: 0)
-        engine.stop()
+        lock.lock()
         isRecording = false
-        #if os(iOS)
-        // Let other audio resume, but do not tear the session down harder than
-        // necessary -- the next start rebuilds the engine anyway.
-        try? AVAudioSession.sharedInstance()
-            .setActive(false, options: [.notifyOthersOnDeactivation])
-        #endif
-        lock.lock(); defer { lock.unlock() }
+        let captured = samples
+        samples.removeAll(keepingCapacity: false)
         // A digitally-silent capture is never a real recording -- even a quiet
         // room has a noise floor. It means the graph delivered nothing.
-        lastCaptureWasSilent = !samples.isEmpty && samples.allSatisfy { $0 == 0 }
-        return samples
+        lastCaptureWasSilent = !captured.isEmpty && captured.allSatisfy { $0 == 0 }
+        lock.unlock()
+
+        if !keepSessionOpen { close() }
+        return captured
     }
 
     /// Turn voice processing off after it produced silence, and rebuild the
@@ -190,6 +301,18 @@ public final class AudioRecorder {
         useVoiceProcessing = false
         noiseSuppressionActive = false
         rebuildEngine()
+        // A live session must not be left holding a stopped engine: the
+        // microphone indicator would stay lit over a graph delivering nothing,
+        // which is the worst of both states.
+        if isLive {
+            do {
+                try startGraph()
+                try startEngine()
+            } catch {
+                isLive = false
+                onLiveChange?(false)
+            }
+        }
     }
 
     private func rebuildEngine() {
@@ -200,6 +323,97 @@ public final class AudioRecorder {
         converter = nil
         configuredVoiceProcessing = nil
     }
+
+    // MARK: - surviving a long session
+
+    #if os(iOS)
+    /// A session held open for minutes meets everything a session held open
+    /// for eight seconds never did: phone calls, Bluetooth headsets arriving,
+    /// audio daemons restarting. Each of these silently kills the graph, and a
+    /// dead graph is indistinguishable from a quiet room by the time anyone
+    /// notices — so each is caught and repaired here, and reported when it
+    /// cannot be.
+    private func observeSessionEvents() {
+        let centre = NotificationCenter.default
+
+        observers.append(centre.addObserver(
+            forName: AVAudioSession.interruptionNotification,
+            object: AVAudioSession.sharedInstance(), queue: .main) { [weak self] note in
+                guard let self,
+                      let raw = note.userInfo?[AVAudioSessionInterruptionTypeKey] as? UInt,
+                      let type = AVAudioSession.InterruptionType(rawValue: raw) else { return }
+                switch type {
+                case .began:
+                    self.handleGraphLost("interrupted")
+                case .ended:
+                    let opts = (note.userInfo?[AVAudioSessionInterruptionOptionKey] as? UInt)
+                        .map(AVAudioSession.InterruptionOptions.init(rawValue:)) ?? []
+                    if opts.contains(.shouldResume) { self.attemptResume() }
+                @unknown default:
+                    break
+                }
+            })
+
+        // The engine stops itself when the hardware format changes under it —
+        // plugging in headphones mid-session, for instance. The tap has to be
+        // reinstalled against the new input node.
+        observers.append(centre.addObserver(
+            forName: .AVAudioEngineConfigurationChange,
+            object: nil, queue: .main) { [weak self] _ in
+                guard let self, self.isLive, !self.engine.isRunning else { return }
+                self.attemptResume()
+            })
+
+        // audiod restarted. Everything we hold is stale, including the session.
+        observers.append(centre.addObserver(
+            forName: AVAudioSession.mediaServicesWereResetNotification,
+            object: nil, queue: .main) { [weak self] _ in
+                guard let self else { return }
+                self.handleGraphLost("audio services reset")
+                self.attemptResume()
+            })
+    }
+
+    private func handleGraphLost(_ reason: String) {
+        NSLog("openflow: capture graph lost (%@)", reason)
+        stopGraph()
+        // Deliberately keeps `isRecording`: whatever was captured before the
+        // interruption is still worth transcribing, and `stop()` must still
+        // hand it back rather than returning nothing.
+        guard isLive else { return }
+        isLive = false
+        onLiveChange?(false)
+    }
+
+    /// Try to get the microphone back. Fails in the background — that is the
+    /// platform rule this whole design is arranged around — and failing
+    /// quietly here is the one thing that must not happen, because the
+    /// keyboard is elsewhere claiming the microphone is open.
+    private func attemptResume() {
+        do {
+            let session = AVAudioSession.sharedInstance()
+            try session.setCategory(.playAndRecord, mode: .measurement,
+                                    options: [.mixWithOthers, .allowBluetooth,
+                                              .defaultToSpeaker])
+            try session.setActive(true, options: [])
+            try startGraph()
+            try startEngine()
+            if !isLive {
+                isLive = true
+                onLiveChange?(true)
+            }
+        } catch {
+            let e = error as NSError
+            NSLog("openflow: could not resume capture: %@ %ld", e.domain, e.code)
+            if isLive {
+                isLive = false
+                onLiveChange?(false)
+            }
+        }
+    }
+    #endif
+
+    // MARK: - metering
 
     private var peak: Float = 0
     private var sawSignal = false
@@ -222,6 +436,8 @@ public final class AudioRecorder {
 
     /// Loudest sample since the last read, as dBFS, for a live meter. Reading
     /// resets it, so callers see peak-since-last-poll rather than peak-ever.
+    /// Metered even when idle, so the app can show that an open microphone is
+    /// genuinely hearing something.
     public func drainPeakDB() -> Float {
         lock.lock(); defer { peak = 0; lock.unlock() }
         return peak > 0 ? 20 * log10(peak) : -120
@@ -270,10 +486,15 @@ public final class AudioRecorder {
         // Filter state is carried across chunks, so this must stay under the
         // same lock and in capture order.
         if useHighPass { chunk = highPass.process(chunk) }
-        samples.append(contentsOf: chunk)
         let chunkPeak = chunk.reduce(Float(0)) { max($0, abs($1)) }
         peak = max(peak, chunkPeak)
-        if chunkPeak > 0 { sawSignal = true }
+        // Metering runs whether or not we are keeping the audio; only the
+        // samples themselves are gated. An idle live session should still be
+        // able to prove the microphone is working.
+        if isRecording {
+            samples.append(contentsOf: chunk)
+            if chunkPeak > 0 { sawSignal = true }
+        }
         lock.unlock()
     }
 }

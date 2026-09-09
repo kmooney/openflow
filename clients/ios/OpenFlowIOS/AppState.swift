@@ -1,10 +1,17 @@
 import Foundation
 import SwiftUI
 import UIKit
+import AVFoundation
 import OpenFlowKit
 
 /// iOS counterpart of the macOS AppModel. The engine, store, formatter and
 /// handoff are all shared code -- only the shell differs.
+///
+/// The iOS shell has one idea the Mac does not need: a **session**. The
+/// microphone is opened once, in the foreground, and stays open while the user
+/// works in other apps. Recordings start and stop inside that session without
+/// anything being opened again, which is the only arrangement iOS permits —
+/// see `AudioRecorder.open()`.
 @MainActor
 final class AppState: ObservableObject {
     @Published private(set) var stats: Stats
@@ -26,13 +33,24 @@ final class AppState: ObservableObject {
     /// False until the keyboard has proved it can reach the shared container,
     /// which only happens with Full Access.
     @Published private(set) var keyboardReady = false
+    /// Shown once a session opens: the user's next move is to leave, and
+    /// nothing about a phone makes that obvious.
+    @Published var showSwipeHint = false
 
     let engine: DictationEngine
     let models: ModelStore
     private let store: Store
     private let handoff: Handoff?
+    private let liveActivity = LiveActivityController()
     private var tick: Timer?
-    private var stopObserver: NSObjectProtocol?
+    private var heartbeat: Timer?
+    /// Darwin notification tokens (the keyboard's requests).
+    private var observers: [NSObjectProtocol] = []
+    /// NotificationCenter tokens. Kept apart because the two are removed by
+    /// different calls, and putting them in one array meant the
+    /// NotificationCenter ones were silently never removed —
+    /// `Handoff.removeObserver` ignores anything that is not its own box.
+    private var localObservers: [NSObjectProtocol] = []
 
     init(engine: DictationEngine, store: Store, models: ModelStore, handoff: Handoff?) {
         self.engine = engine
@@ -42,23 +60,63 @@ final class AppState: ObservableObject {
         self.stats = store.stats()
         self.tone = Tone(rawValue: UInt32(UserDefaults.standard.integer(forKey: "tone"))) ?? .formal
         engine.tone = tone
+        // The whole iOS design in one line: the microphone is not opened per
+        // recording, it is held.
+        engine.holdMicrophoneOpen = true
         engine.onState = { [weak self] s in Task { @MainActor in self?.apply(s) } }
         engine.onNotice = { [weak self] m in Task { @MainActor in self?.status = m } }
+        engine.onLive = { [weak self] live in
+            Task { @MainActor in self?.applyLive(live) }
+        }
 
-        // The keyboard asks us to stop when the user taps its key from inside
-        // another app -- we are in the background then, still recording, and
-        // this is the only way back.
-        stopObserver = Handoff.observeStopRequests { [weak self] in
+        // Everything the keyboard can ask for. All four are answerable from
+        // the background, which is the point: the user is in another app and
+        // the keyboard is the only OpenFlow surface they can reach.
+        observers.append(Handoff.observeStartRequests { [weak self] in
+            Task { @MainActor in self?.beginFromKeyboard() }
+        })
+        observers.append(Handoff.observeStopRequests { [weak self] in
             Task { @MainActor in
                 guard let self, self.isRecording else { return }
                 self.finish()
             }
-        }
-        // We are definitionally not recording at launch. Says so explicitly
-        // because the flag lives in a file that outlives the process: a crash
-        // or a kill mid-recording used to leave the keyboard offering "Finish"
-        // until the five-minute staleness window expired.
-        handoff?.setRecording(false)
+        })
+        observers.append(Handoff.observeCancelRequests { [weak self] in
+            Task { @MainActor in self?.cancel() }
+        })
+        observers.append(Handoff.observeCloseRequests { [weak self] in
+            Task { @MainActor in self?.endSession() }
+        })
+
+        // iOS will not let a backgrounded app submit GPU work — whisper's Metal
+        // encode fails outright with kIOGPUCommandBufferCallbackError
+        // BackgroundExecutionNotPermitted. Since transcribing from the
+        // background is the whole point of the keyboard, the backend is chosen
+        // on the way across rather than discovered mid-utterance.
+        let centre = NotificationCenter.default
+        localObservers.append(centre.addObserver(
+            forName: UIApplication.didEnterBackgroundNotification,
+            object: nil, queue: .main) { [weak self] _ in
+                Task { @MainActor in
+                    guard let self, self.engine.isLive else { return }
+                    self.engine.prepare(forGPU: false)
+                }
+            })
+        localObservers.append(centre.addObserver(
+            forName: UIApplication.willEnterForegroundNotification,
+            object: nil, queue: .main) { [weak self] _ in
+                Task { @MainActor in self?.engine.prepare(forGPU: true) }
+            })
+
+        // We are definitionally not live at launch. Says so explicitly because
+        // the flag lives in a file that outlives the process: a crash or a kill
+        // mid-recording used to leave the keyboard offering "Finish" until the
+        // staleness window expired.
+        handoff?.setMic(live: false, recording: false)
+        // Same for the notch. A stranded Live Activity from a killed session
+        // would otherwise sit there claiming the microphone is open.
+        liveActivity.adoptExisting()
+        liveActivity.end()
 
         keyboardReady = handoff?.keyboardIsReady ?? false
         reloadHistory()
@@ -66,13 +124,126 @@ final class AppState: ObservableObject {
 
     deinit {
         tick?.invalidate()
-        if let stopObserver { Handoff.removeObserver(stopObserver) }
+        heartbeat?.invalidate()
+        for o in observers { Handoff.removeObserver(o) }
+        for o in localObservers { NotificationCenter.default.removeObserver(o) }
     }
 
     var isRecording: Bool { if case .recording = state { return true }; return false }
     var isThinking: Bool { if case .thinking = state { return true }; return false }
+    /// Microphone open — the indicator is lit and the keyboard can start a
+    /// recording from inside another app.
+    var isLive: Bool { engine.isLive }
 
-    func toggle() { isRecording ? finish() : begin() }
+    // MARK: - the session
+
+    /// Open the microphone on arrival, without being asked and **without
+    /// arming a recording**.
+    ///
+    /// There is exactly one reason to bring this app to the front, and it is
+    /// not to read the history — so the microphone opens by itself. But it does
+    /// not start recording, and that distinction is the whole point:
+    ///
+    /// Arming here meant the user swiped back to a keyboard already reading
+    /// *Insert*, inserted, and only then saw *Speak*. Every cycle after the
+    /// first began at *Speak*. So the first one was the odd one out, and the
+    /// first one is the one that teaches the user what the key does. An open
+    /// microphone that is not yet recording is the state the rest of the loop
+    /// returns to, so it is the state to arrive in.
+    ///
+    /// Silent when the microphone is already open, when a transcription is in
+    /// flight, or when permission has been refused — none of those are helped
+    /// by asking again on every return to the foreground.
+    func openMicrophoneOnAppearing() {
+        guard !isLive, !isThinking else { return }
+        guard AVAudioApplication.shared.recordPermission != .denied else { return }
+        openMicrophone()
+    }
+
+    /// Open the microphone and start talking. One tap, because the user's next
+    /// move is to leave this screen and a second tap would have to happen
+    /// somewhere they can no longer see.
+    func startSession() {
+        UIImpactFeedbackGenerator(style: .medium).impactOccurred()
+
+        // Ask before opening, not after. A session opened without permission
+        // activates, runs, lights nothing and hears nothing — which looks
+        // exactly like a broken microphone rather than a missing answer.
+        switch AVAudioApplication.shared.recordPermission {
+        case .undetermined:
+            AVAudioApplication.requestRecordPermission { [weak self] granted in
+                Task { @MainActor in
+                    guard let self else { return }
+                    if granted { self.openAndListen() }
+                    else { self.status = "Microphone access was declined." }
+                }
+            }
+            return
+        case .denied:
+            status = "Microphone access is off — turn it on in Settings › OpenFlow."
+            UINotificationFeedbackGenerator().notificationOccurred(.error)
+            return
+        default:
+            break
+        }
+        openAndListen()
+    }
+
+    /// Open the microphone and leave it idle. Returns false if it would not
+    /// open, so callers do not go on to arm a recording against nothing.
+    @discardableResult
+    private func openMicrophone() -> Bool {
+        do {
+            try engine.openMicrophone()
+        } catch {
+            let e = error as NSError
+            status = "could not open the microphone: \(e.domain) \(e.code)"
+            UINotificationFeedbackGenerator().notificationOccurred(.error)
+            return false
+        }
+        liveActivity.start(recording: false)
+        showSwipeHint = true
+        return true
+    }
+
+    private func openAndListen() {
+        guard openMicrophone() else { return }
+        engine.begin()
+    }
+
+    /// Put the microphone away. Also reachable from the keyboard, so it must
+    /// work from the background — closing a session does, unlike opening one.
+    func endSession() {
+        if isRecording {
+            // Do not throw away what has already been said just because the
+            // user is done. Transcribe it, then close.
+            engine.end(appContext: nil) { [weak self] result in
+                Task { @MainActor in
+                    self?.deliver(result)
+                    self?.engine.closeMicrophone()
+                }
+            }
+            return
+        }
+        engine.closeMicrophone()
+    }
+
+    /// Throw the current recording away without transcribing it, keeping the
+    /// microphone open.
+    func cancel() {
+        guard isRecording else { return }
+        _ = engine.discard()
+        status = "Discarded"
+        UINotificationFeedbackGenerator().notificationOccurred(.warning)
+    }
+
+    // MARK: - recordings within a session
+
+    func toggle() {
+        if isRecording { finish() }
+        else if isLive { begin() }
+        else { startSession() }
+    }
 
     func begin() {
         UIImpactFeedbackGenerator(style: .medium).impactOccurred()
@@ -83,54 +254,120 @@ final class AppState: ObservableObject {
         engine.begin()
     }
 
+    /// A start asked for by the keyboard while we sit in the background. It
+    /// costs nothing beyond flipping a flag, because the graph opened in
+    /// `startSession` never stopped — but if it *has* stopped (an interruption
+    /// we could not recover from), say so rather than pretending.
+    private func beginFromKeyboard() {
+        guard !isRecording, !isThinking else { return }
+        guard isLive else {
+            handoff?.setStatus("microphone closed — open OpenFlow")
+            return
+        }
+        engine.begin()
+    }
+
     func finish() {
         // `engine.end` returns early, without ever calling back, when it is not
         // recording. Reconcile the shared flag here or the keyboard is left
         // showing a Finish button whose taps disappear into nothing.
         guard isRecording else {
-            handoff?.setRecording(false)
+            publishMicState()
             return
         }
+        liveActivity.note("Transcribing…")
+        // Authoritative, in case a transition notification was missed. Cheap
+        // when it agrees with what `prepare(forGPU:)` already arranged.
+        engine.preferGPU = UIApplication.shared.applicationState == .active
         engine.end { [weak self] result in
-            Task { @MainActor in
-                guard let self else { return }
-                switch result {
-                case .success(let o):
-                    UIPasteboard.general.string = o.text
-                    // Offer it to the keyboard whether or not we were launched
-                    // by it: the user may switch to a text field afterwards,
-                    // and the offer expires on its own if unused.
-                    try? self.handoff?.offer(o.text, tone: self.tone)
-                    self.status = self.handedOffFromKeyboard
-                        ? "Ready — switch back to your app"
-                        : "\(o.result.spokenWords) words · copied"
-                    UINotificationFeedbackGenerator().notificationOccurred(.success)
-                case .failure(let e):
-                    self.status = e.localizedDescription
-                    UINotificationFeedbackGenerator().notificationOccurred(.warning)
-                }
-                self.refresh()
-            }
+            Task { @MainActor in self?.deliver(result) }
         }
     }
 
+    private func deliver(_ result: Result<DictationOutcome, Error>) {
+        switch result {
+        case .success(let o):
+            UIPasteboard.general.string = o.text
+            // Offer it to the keyboard whether or not we were launched
+            // by it: the user may switch to a text field afterwards,
+            // and the offer expires on its own if unused.
+            try? handoff?.offer(o.text, tone: tone)
+            status = isLive
+                ? "\(o.result.spokenWords) words · inserted"
+                : "\(o.result.spokenWords) words · copied"
+            UINotificationFeedbackGenerator().notificationOccurred(.success)
+        case .failure(let e):
+            status = e.localizedDescription
+            // The keyboard is very likely the surface the user is looking at,
+            // and it hears nothing at all when a transcription fails — no
+            // transcript is offered, so no notification is posted. Tell it.
+            handoff?.setFailure(e.localizedDescription)
+            UINotificationFeedbackGenerator().notificationOccurred(.warning)
+        }
+        refresh()
+    }
+
+    // MARK: - state plumbing
+
     private func apply(_ s: DictationState) {
         state = s
-        // The one place the keyboard's view of us is written. Derived from the
-        // engine rather than from the caller's intent, so the two processes
-        // cannot disagree about whether a recording is running.
-        handoff?.setRecording(s == .recording)
+        publishMicState()
         switch s {
         case .idle:              handoff?.setStatus("idle")
+        case .open:              handoff?.setStatus("mic open")
         case .recording:         handoff?.setStatus("recording")
         case .thinking:          handoff?.setStatus("transcribing")
         case .failed(let m):     handoff?.setStatus("could not start: \(m)")
         }
+
+        switch s {
+        case .recording: liveActivity.update(recording: true)
+        case .open:      liveActivity.update(recording: false)
+        case .thinking:  liveActivity.note("Transcribing…")
+        case .idle:      liveActivity.end()
+        case .failed:    liveActivity.end()
+        }
+
         if case .recording = s { startTick() } else { stopTick() }
         // A failed start is worth saying out loud. It used to set the state and
         // nothing else, which is how a dead microphone looked like a dead
         // button.
         if case .failed(let message) = s { status = message }
+    }
+
+    /// The microphone came or went, independently of any recording. An
+    /// interruption we could not recover from lands here, and it must reach
+    /// both the keyboard and the notch: they are the two surfaces still
+    /// claiming the session is alive.
+    private func applyLive(_ live: Bool) {
+        publishMicState()
+        if live {
+            startHeartbeat()
+        } else {
+            stopHeartbeat()
+            liveActivity.end()
+            showSwipeHint = false
+            if !isThinking {
+                status = "Microphone closed."
+            }
+        }
+    }
+
+    /// The one place the keyboard's view of us is written. Derived from the
+    /// engine rather than from the caller's intent, so the two processes cannot
+    /// disagree about what is happening.
+    private func publishMicState() {
+        handoff?.setMic(live: engine.isLive, recording: isRecording,
+                        startedAt: recordingStartedAt)
+        if engine.isLive { startHeartbeat() } else { stopHeartbeat() }
+    }
+
+    /// When the current recording began, so the keyboard and the Live Activity
+    /// can run their own timers rather than waiting for us to push numbers at
+    /// them from the background.
+    private var recordingStartedAt: Date? {
+        guard isRecording else { return nil }
+        return Date().addingTimeInterval(-engine.recordedSeconds)
     }
 
     private func startTick() {
@@ -145,6 +382,18 @@ final class AppState: ObservableObject {
     }
 
     private func stopTick() { tick?.invalidate(); tick = nil; elapsed = 0; inputDB = -120 }
+
+    /// Proof of life for the keyboard, which cannot see this process at all.
+    /// Without it a killed app leaves a state file that reads "microphone
+    /// open" forever, and the keyboard offers a button that does nothing.
+    private func startHeartbeat() {
+        guard heartbeat == nil else { return }
+        heartbeat = Timer.scheduledTimer(withTimeInterval: 5, repeats: true) { [weak self] _ in
+            Task { @MainActor in self?.handoff?.heartbeat() }
+        }
+    }
+
+    private func stopHeartbeat() { heartbeat?.invalidate(); heartbeat = nil }
 
     func refresh() {
         stats = store.stats()

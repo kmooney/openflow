@@ -177,7 +177,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             showElapsed(0)          // don't wait for the first tick to appear
         case .thinking:
             statusItem.button?.title = " …"
-        case .idle, .failed:
+        // `.open` is an iOS state: the Mac opens the microphone per recording
+        // rather than holding it, so it never rests there — and if it somehow
+        // did, an idle icon is the honest drawing of it.
+        case .idle, .open, .failed:
             setIcon(idle: true)
             statusItem.button?.title = ""
         }
