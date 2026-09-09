@@ -368,7 +368,16 @@ public final class DictationEngine {
                             : "could not load model at \(modelPath)")
             }
 
-            var raw = transcriber.transcribe(samples: audio, vocabulary: vocab)
+            // Applied AFTER the speech check, never before: the check's
+            // thresholds are absolute, so normalising first would make a silent
+            // room look exactly as loud as a sentence and defeat the one
+            // defence against whisper confabulating sentences out of noise.
+            let (levelled, gainDB) = SignalStats.normalized(audio)
+            if gainDB > 0 {
+                NSLog("openflow: lifted quiet capture by %.1f dB before transcription", gainDB)
+            }
+
+            var raw = transcriber.transcribe(samples: levelled, vocabulary: vocab)
 
             // A failed whisper run and a silent one both come back as "".
             // Retry once on the CPU: Metal is the only part of this that has
@@ -381,7 +390,7 @@ public final class DictationEngine {
                 NSLog("openflow: whisper failed on the GPU (%d) — retrying on the CPU", status)
                 if let cpu = Transcriber(modelPath: modelPath, useGPU: false) {
                     self.transcriber = cpu
-                    raw = cpu.transcribe(samples: audio, vocabulary: vocab)
+                    raw = cpu.transcribe(samples: levelled, vocabulary: vocab)
                     if !raw.isEmpty {
                         DispatchQueue.main.async {
                             self.onNotice?("Switched to CPU transcription — the GPU path failed (\(status)).")

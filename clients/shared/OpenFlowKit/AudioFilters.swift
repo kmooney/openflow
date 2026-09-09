@@ -70,6 +70,60 @@ public enum SignalStats {
         return peak > 0 ? 20 * log10(peak) : -120
     }
 
+    /// Scale a recording up so whisper hears it at a sensible level.
+    ///
+    /// The microphone is not the problem and there is no gain knob to turn:
+    /// `AVAudioSession.setInputGain` is refused on iPhone built-in mics
+    /// (`isInputGainSettable` is false), and the session runs in `.measurement`
+    /// mode, which exists precisely to hand back raw audio with the system's
+    /// automatic gain control switched off. Quiet speech therefore arrives
+    /// quiet, and asking the user to talk louder at their phone is not a fix.
+    ///
+    /// So the gain is applied here, where it is deterministic and testable —
+    /// the same reasoning as `NoiseReduction`: the worst this can do is sound
+    /// wrong, where a capture-time change can take the microphone down with it.
+    ///
+    /// The level is taken from the loud end of the *frame* energies rather than
+    /// the absolute peak, so one door slam or table knock does not decide the
+    /// gain for a whole utterance. Never attenuates: a recording that is
+    /// already healthy is returned untouched.
+    public static func normalized(_ samples: [Float],
+                                  targetRMS: Float = 0.10,
+                                  maxGain: Float = 12,
+                                  sampleRate: Int = 16_000) -> (samples: [Float], gainDB: Float) {
+        let window = sampleRate / 10                      // 100 ms
+        guard samples.count >= window else { return (samples, 0) }
+
+        var levels: [Float] = []
+        var i = 0
+        while i + window <= samples.count {
+            levels.append(rms(samples[i..<(i + window)]))
+            i += window
+        }
+        guard !levels.isEmpty else { return (samples, 0) }
+        levels.sort()
+
+        // The 95th percentile is "how loud this person actually is" — high
+        // enough to be speech rather than the gaps between words, low enough
+        // not to be a transient.
+        let speechLevel = levels[max(0, (levels.count * 95) / 100 - 1)]
+        guard speechLevel > 0 else { return (samples, 0) }
+
+        var gain = min(maxGain, targetRMS / speechLevel)
+        // Only ever louder. Whisper copes with a hot recording far better than
+        // with a quiet one, and pulling a good recording down helps nobody.
+        guard gain > 1.01 else { return (samples, 0) }
+
+        // Whatever the frame energies say, do not drive the true peak into
+        // clipping — square edges are exactly the artefact whisper reads as
+        // noise.
+        let peak = samples.reduce(Float(0)) { max($0, abs($1)) }
+        if peak > 0 { gain = min(gain, 0.97 / peak) }
+        guard gain > 1.01 else { return (samples, 0) }
+
+        return (samples.map { $0 * gain }, 20 * log10(gain))
+    }
+
     /// Does this recording plausibly contain speech?
     ///
     /// Whisper will confabulate fluent sentences out of steady broadband noise,
@@ -97,9 +151,23 @@ public enum SignalStats {
 
     /// Anything at or above this frame energy is loud enough to be speech, and
     /// is accepted regardless of dynamics.
-    public static var speechLevel: Float = 0.030
+    public static var speechLevel: Float = 0.012
     /// Below this, treat as silence whatever the dynamics say.
-    public static var silenceLevel: Float = 0.006
+    ///
+    /// **Measured, not guessed.** These were 0.030 and 0.006, tuned against a
+    /// Mac. An iPhone runs its session in `.measurement` mode, which hands back
+    /// audio with the system's gain control switched off, and a normal speaking
+    /// voice arrives around -38 dBFS peak — roughly 20 dB below what those
+    /// numbers assumed. The result was five seconds of real speech discarded as
+    /// "heard nothing", with the microphone working perfectly.
+    ///
+    /// The discrimination that matters is the dynamic-range test below, which
+    /// is scale-invariant and does the real work of telling a voice from a hum.
+    /// These two are only the guards at either end, and guards set 20 dB inside
+    /// the signal are not guards, they are a fault. Erring low is the correct
+    /// direction: losing something you actually said is worse than a
+    /// hallucination you can see and delete.
+    public static var silenceLevel: Float = 0.0015
     /// Only used to reject in the band between the two levels above.
     public static var minDynamicRatio: Float = 1.5
 
