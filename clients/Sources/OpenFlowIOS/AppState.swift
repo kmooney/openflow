@@ -42,6 +42,7 @@ final class AppState: ObservableObject {
     private let store: Store
     private let handoff: Handoff?
     private let liveActivity = LiveActivityController()
+    private let voiceProcessingFailedKey = "voiceProcessingFailed"
     private var tick: Timer?
     private var heartbeat: Timer?
     /// Darwin notification tokens (the keyboard's requests).
@@ -63,8 +64,26 @@ final class AppState: ObservableObject {
         // The whole iOS design in one line: the microphone is not opened per
         // recording, it is held.
         engine.holdMicrophoneOpen = true
+
+        // Apple's voice-processing unit — echo cancellation, noise suppression
+        // and, the reason it is on here, automatic gain control. An iPhone has
+        // no settable input gain, so this is the only thing that can make a
+        // quiet talker arrive at a usable level rather than being asked to
+        // raise their voice at their phone.
+        //
+        // It is off by default in the shared code because it once produced
+        // captures of exact digital zeros — on a Mac. If it does that here it
+        // is caught within half a second and switched off, and *that verdict is
+        // remembered*: a device where it fails should not spend the first
+        // recording of every launch rediscovering it.
+        engine.useVoiceProcessing = !UserDefaults.standard.bool(forKey: voiceProcessingFailedKey)
         engine.onState = { [weak self] s in Task { @MainActor in self?.apply(s) } }
-        engine.onNotice = { [weak self] m in Task { @MainActor in self?.status = m } }
+        engine.onNotice = { [weak self] m in
+            Task { @MainActor in
+                self?.status = m
+                self?.rememberVoiceProcessingVerdict()
+            }
+        }
         engine.onLive = { [weak self] live in
             Task { @MainActor in self?.applyLive(live) }
         }
@@ -317,7 +336,17 @@ final class AppState: ObservableObject {
             handoff?.setFailure(e.localizedDescription)
             UINotificationFeedbackGenerator().notificationOccurred(.warning)
         }
+        rememberVoiceProcessingVerdict()
         refresh()
+    }
+
+    /// Persist a voice-processing failure so it is not rediscovered, at the
+    /// cost of a recording, on every launch.
+    private func rememberVoiceProcessingVerdict() {
+        guard engine.voiceProcessingFailed,
+              !UserDefaults.standard.bool(forKey: voiceProcessingFailedKey) else { return }
+        UserDefaults.standard.set(true, forKey: voiceProcessingFailedKey)
+        NSLog("openflow: voice processing failed on this device — not asking again")
     }
 
     // MARK: - state plumbing

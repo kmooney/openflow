@@ -108,3 +108,123 @@ extension NoiseTests {
         XCTAssertEqual(b, a, accuracy: a * 0.02, "STFT round trip must be unity gain")
     }
 }
+
+// MARK: - levelling quiet speech
+//
+// There is no gain knob on an iPhone: `setInputGain` is refused on the built-in
+// microphone, and `.measurement` mode deliberately hands back audio with the
+// system's AGC switched off. So a quiet talker is levelled here instead of
+// being asked to raise their voice at their phone.
+
+final class NormalizationTests: XCTestCase {
+
+    /// Speech-shaped: bursts with gaps, which is what the percentile logic is
+    /// built around.
+    private func utterance(level: Float, seconds: Double = 3) -> [Float] {
+        let n = Int(16_000 * seconds)
+        var out = [Float](repeating: 0, count: n)
+        for i in 0..<n {
+            let t = Float(i) / 16_000
+            // Talk for 300 ms, pause for 200 ms.
+            let speaking = Int(t / 0.5) % 2 == 0
+            guard speaking else { continue }
+            out[i] = level * sin(2 * .pi * 180 * t) * (0.6 + 0.4 * sin(2 * .pi * 3 * t))
+        }
+        return out
+    }
+
+    func testQuietSpeechIsLifted() {
+        let quiet = utterance(level: 0.01)          // about -40 dBFS
+        let (out, gainDB) = SignalStats.normalized(quiet)
+
+        XCTAssertGreaterThan(gainDB, 6, "a very quiet capture must be lifted appreciably")
+        XCTAssertGreaterThan(SignalStats.rms(out), SignalStats.rms(quiet))
+    }
+
+    /// Never attenuate. Whisper copes with a hot recording far better than a
+    /// quiet one, and pulling a good recording down helps nobody.
+    func testHealthyRecordingIsUntouched() {
+        let healthy = utterance(level: 0.5)
+        let (out, gainDB) = SignalStats.normalized(healthy)
+
+        XCTAssertEqual(gainDB, 0, "an already-loud recording must be returned as-is")
+        XCTAssertEqual(out, healthy)
+    }
+
+    /// The gain must never drive the waveform into clipping: square edges are
+    /// precisely the artefact whisper reads as noise.
+    func testGainNeverClips() {
+        var quiet = utterance(level: 0.02)
+        quiet[1000] = 0.9                            // a knock on the desk
+        let (out, _) = SignalStats.normalized(quiet)
+
+        let peak = out.reduce(Float(0)) { max($0, abs($1)) }
+        XCTAssertLessThanOrEqual(peak, 1.0, "normalisation must not clip")
+    }
+
+    /// One transient must not set the level for a whole utterance — that is why
+    /// frame energies are used rather than the absolute peak.
+    func testTransientDoesNotSuppressTheGain() {
+        var quiet = utterance(level: 0.01)
+        quiet[500] = 0.35                            // a single loud click
+        let (_, gainDB) = SignalStats.normalized(quiet)
+
+        XCTAssertGreaterThan(gainDB, 3, "a click must not decide the gain for the utterance")
+    }
+
+    func testSilenceIsLeftAlone() {
+        let (out, gainDB) = SignalStats.normalized([Float](repeating: 0, count: 16_000))
+        XCTAssertEqual(gainDB, 0)
+        XCTAssertTrue(out.allSatisfy { $0 == 0 }, "there is nothing to amplify in silence")
+    }
+}
+
+// MARK: - the levels a phone actually produces
+//
+// The speech check's absolute guards were tuned against a Mac. An iPhone in
+// `.measurement` mode delivers a normal speaking voice around -38 dBFS peak,
+// some 20 dB below what those numbers assumed, and five seconds of real speech
+// was discarded as "heard nothing" with the microphone working perfectly.
+
+final class QuietSpeechTests: XCTestCase {
+
+    /// Speech-shaped: bursts with gaps, at a level a phone really delivers.
+    private func utterance(peak: Float, seconds: Double = 5) -> [Float] {
+        let n = Int(16_000 * seconds)
+        var out = [Float](repeating: 0, count: n)
+        for i in 0..<n {
+            let t = Float(i) / 16_000
+            guard Int(t / 0.5) % 2 == 0 else { continue }   // talk, pause, talk
+            out[i] = peak * sin(2 * .pi * 180 * t) * (0.6 + 0.4 * sin(2 * .pi * 3 * t))
+        }
+        return out
+    }
+
+    /// The exact case that was being thrown away: -38 dBFS peak, five seconds.
+    func testQuietPhoneSpeechIsAccepted() {
+        let quiet = utterance(peak: 0.0126)             // -38 dBFS
+        XCTAssertEqual(SignalStats.speechCheck(quiet), .speech,
+                       "a normal speaking voice on a phone must not read as silence")
+    }
+
+    /// Still permissive at the level the meter showed on failing recordings.
+    func testVeryQuietSpeechIsAccepted() {
+        XCTAssertEqual(SignalStats.speechCheck(utterance(peak: 0.005)), .speech)
+    }
+
+    /// The guard must still catch an empty room. Steady broadband noise is what
+    /// whisper confabulates fluent sentences out of.
+    func testSteadyNoiseIsStillRejected() {
+        var rng = SystemRandomNumberGenerator()
+        let noise = (0..<(16_000 * 5)).map { _ in
+            Float.random(in: -0.004...0.004, using: &rng)
+        }
+        XCTAssertNotEqual(SignalStats.speechCheck(noise), .speech,
+                          "lowering the floor must not let a hum through as speech")
+    }
+
+    func testDigitalSilenceIsStillSilence() {
+        XCTAssertEqual(SignalStats.speechCheck([Float](repeating: 0, count: 16_000 * 3)),
+                       .silence)
+    }
+}

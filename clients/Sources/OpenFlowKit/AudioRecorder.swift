@@ -52,12 +52,17 @@ public final class AudioRecorder {
     /// Apple's voice-processing I/O unit: echo cancellation, noise suppression
     /// and AGC, the same stack FaceTime uses.
     ///
-    /// **Off by default.** Enabling it switches the input to an aggregate
-    /// VPIO unit, and on this machine that produced captures of exact digital
-    /// zeros -- working dictation traded for a feature that silently broke it.
-    /// It is worth having in a noisy place, so it stays available behind a
-    /// toggle with an automatic fallback, but it is not worth defaulting on
-    /// until it is known to work on the hardware in front of the user.
+    /// **Off by default here; iOS turns it on.** Enabling it switches the input
+    /// to an aggregate VPIO unit, and on the Mac that produced captures of
+    /// exact digital zeros -- working dictation traded for a feature that
+    /// silently broke it. So the shared default stays off and the caller opts
+    /// in for the hardware it has actually been tried on.
+    ///
+    /// iOS opts in because it has no alternative: an iPhone's input gain is not
+    /// settable, so the AGC inside this unit is the only thing that can lift a
+    /// quiet talker to a usable level. The automatic fallback below still
+    /// applies, and iOS remembers the verdict rather than re-testing it with
+    /// the first recording of every launch.
     public var useVoiceProcessing = false
     /// High-pass the captured audio to strip low-frequency rumble.
     public var useHighPass = true
@@ -83,6 +88,30 @@ public final class AudioRecorder {
         for o in observers { NotificationCenter.default.removeObserver(o) }
         #endif
     }
+
+    #if os(iOS)
+    /// Session-level processing, which is **not** the same lever as
+    /// `useVoiceProcessing` — and conflating the two cost a round of testing.
+    ///
+    /// `useVoiceProcessing` swaps the engine's input node for the aggregate
+    /// VPIO unit. That is the thing that has now produced captures of exact
+    /// digital zeros on two separate devices, and it is switched off for good
+    /// on any device where it does.
+    ///
+    /// The session *mode* is independent of it. `.measurement` exists to switch
+    /// the system's input processing off and hand back raw audio — automatic
+    /// gain control included, which is precisely why a quiet talker arrives at
+    /// -27 dBFS. `.default` leaves that processing on. It colours what whisper
+    /// hears, which is what `.measurement` was chosen to avoid, but a little
+    /// colouration on audio that is actually audible beats pristine audio
+    /// nobody can transcribe.
+    ///
+    /// So: VPIO off, system AGC on. The failure of the first does not require
+    /// giving up the second.
+    private var sessionMode: AVAudioSession.Mode {
+        useVoiceProcessing ? .voiceChat : .default
+    }
+    #endif
 
     public enum RecorderError: Error, LocalizedError {
         case noConverter
@@ -115,7 +144,7 @@ public final class AudioRecorder {
         // which for an always-on session matters more than a clean capture
         // while music happens to be playing.
         let session = AVAudioSession.sharedInstance()
-        try session.setCategory(.playAndRecord, mode: .measurement,
+        try session.setCategory(.playAndRecord, mode: sessionMode,
                                 options: [.mixWithOthers, .allowBluetooth,
                                           .defaultToSpeaker])
         try session.setActive(true, options: [])
@@ -392,7 +421,7 @@ public final class AudioRecorder {
     private func attemptResume() {
         do {
             let session = AVAudioSession.sharedInstance()
-            try session.setCategory(.playAndRecord, mode: .measurement,
+            try session.setCategory(.playAndRecord, mode: sessionMode,
                                     options: [.mixWithOthers, .allowBluetooth,
                                               .defaultToSpeaker])
             try session.setActive(true, options: [])
