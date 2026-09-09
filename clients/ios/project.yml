@@ -128,7 +128,7 @@ targets:
     type: app-extension
     platform: iOS
     sources:
-      - path: ../Sources/OpenFlowActivity
+      - path: OpenFlowActivity
     info:
       path: Activity-Info.plist
       properties:
@@ -144,8 +144,8 @@ targets:
       # SWIFT_INCLUDE_PATHS alone; it has to be handed the file. Applied to
       # every target, because importing OpenFlowKit pulls its module
       # dependencies in transitively.
-      OTHER_SWIFT_FLAGS: -Xcc -fmodule-map-file=$(SRCROOT)/../Sources/CWhisper/module.modulemap -Xcc -fmodule-map-file=$(SRCROOT)/../Sources/COpenFlow/module.modulemap -Xcc -I$(SRCROOT)/../Sources/CWhisper/include -Xcc -I$(SRCROOT)/../Sources/COpenFlow/include
-      HEADER_SEARCH_PATHS: $(SRCROOT)/../Sources/CWhisper/include $(SRCROOT)/../Sources/COpenFlow/include
+      OTHER_SWIFT_FLAGS: -Xcc -fmodule-map-file=$(SRCROOT)/../shared/CWhisper/module.modulemap -Xcc -fmodule-map-file=$(SRCROOT)/../shared/COpenFlow/module.modulemap -Xcc -I$(SRCROOT)/../shared/CWhisper/include -Xcc -I$(SRCROOT)/../shared/COpenFlow/include
+      HEADER_SEARCH_PATHS: $(SRCROOT)/../shared/CWhisper/include $(SRCROOT)/../shared/COpenFlow/include
       MARKETING_VERSION: "0.1.0"
       CURRENT_PROJECT_VERSION: "1"
       SWIFT_VERSION: "5.9"
