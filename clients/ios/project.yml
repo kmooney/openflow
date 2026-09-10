@@ -57,6 +57,8 @@ targets:
     platform: iOS
     sources:
       - path: OpenFlowIOS
+      - path: Assets.xcassets
+        buildPhase: resources
       - path: Resources
         optional: true
         buildPhase: resources
@@ -111,6 +113,7 @@ targets:
         codeSign: true
     settings:
       PRODUCT_BUNDLE_IDENTIFIER: dev.openflow.ios
+      ASSETCATALOG_COMPILER_APPICON_NAME: AppIcon
       # Xcode's explicitly-built modules will not discover a module map from
       # SWIFT_INCLUDE_PATHS alone; it has to be handed the file. Applied to
       # every target, because importing OpenFlowKit pulls its module

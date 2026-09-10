@@ -42,6 +42,10 @@ echo "==> bundle"
 rm -rf "$APP"
 mkdir -p "$APP/Contents/MacOS" "$APP/Contents/Resources"
 cp "$PKG/.build/release/OpenFlowMac" "$APP/Contents/MacOS/OpenFlow"
+# LSUIElement hides the Dock icon, but Finder, the About box and the
+# Accessibility permission prompt all still show one -- and an app asking for
+# the microphone should look like something rather than a blank page.
+cp "$(dirname "$0")/OpenFlow.icns" "$APP/Contents/Resources/OpenFlow.icns"
 
 cat > "$APP/Contents/Info.plist" <<'PLIST'
 <?xml version="1.0" encoding="UTF-8"?>
@@ -52,6 +56,7 @@ cat > "$APP/Contents/Info.plist" <<'PLIST'
   <key>CFBundleDisplayName</key>       <string>OpenFlow</string>
   <key>CFBundleIdentifier</key>        <string>dev.openflow.mac</string>
   <key>CFBundleExecutable</key>        <string>OpenFlow</string>
+  <key>CFBundleIconFile</key>          <string>OpenFlow</string>
   <key>CFBundleVersion</key>           <string>0.1.0</string>
   <key>CFBundleShortVersionString</key><string>0.1.0</string>
   <key>CFBundlePackageType</key>       <string>APPL</string>
