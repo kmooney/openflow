@@ -25,6 +25,11 @@ final class AppState: ObservableObject {
         didSet {
             UserDefaults.standard.set(Int(tone.rawValue), forKey: "tone")
             engine.tone = tone
+            // Guarded rather than unconditional: writing back a value that came
+            // *from* the container posts a notification that comes straight
+            // back to us. Comparing first makes the exchange settle instead of
+            // ringing.
+            if handoff?.tone() != tone { handoff?.setTone(tone) }
         }
     }
     /// Set when launched from the keyboard, so we can start listening at once
@@ -62,8 +67,18 @@ final class AppState: ObservableObject {
         self.store = store
         self.handoff = handoff
         self.stats = store.stats()
-        self.tone = Tone(rawValue: UInt32(UserDefaults.standard.integer(forKey: "tone"))) ?? .formal
+        // The container wins over local defaults: a tone chosen on the keyboard
+        // must survive the app being killed, and the keyboard cannot write to
+        // the app's UserDefaults.
+        self.tone = Handoff(appGroup: OpenFlowIDs.appGroup)?.tone()
+            ?? Tone(rawValue: UInt32(UserDefaults.standard.integer(forKey: "tone")))
+            ?? .formal
         engine.tone = tone
+        // `didSet` does not fire for the assignment in `init`, so on a fresh
+        // install the container would hold no tone at all and the keyboard
+        // would show Formal whatever the app was set to. Seed it, without
+        // clobbering a choice already made on the keyboard.
+        if handoff?.tone() == nil { handoff?.setTone(tone) }
         // The whole iOS design in one line: the microphone is not opened per
         // recording, it is held.
         engine.holdMicrophoneOpen = true
@@ -108,6 +123,13 @@ final class AppState: ObservableObject {
         })
         observers.append(Handoff.observeCloseRequests { [weak self] in
             Task { @MainActor in self?.endSession() }
+        })
+        observers.append(Handoff.observeToneChanges { [weak self] in
+            Task { @MainActor in
+                guard let self, let picked = self.handoff?.tone(), picked != self.tone
+                else { return }
+                self.tone = picked
+            }
         })
 
         // iOS will not let a backgrounded app submit GPU work — whisper's Metal

@@ -31,6 +31,10 @@ final class KeyboardViewController: UIInputViewController {
     /// as a real SwiftUI view in a real hierarchy — see `OpenAppKey` for why it
     /// cannot be a `UIButton` like every other key here.
     private var openAppKey: UIHostingController<OpenAppKey>!
+    /// Tone is "a per-utterance choice, not a setting" by its own definition,
+    /// so it belongs where the utterance happens rather than in an app the user
+    /// left several minutes ago.
+    private var tonePicker: UISegmentedControl!
     /// Runs only while the keyboard is on screen. Drives the elapsed counter
     /// and picks up state the Darwin notification missed.
     private var poll: Timer?
@@ -79,6 +83,9 @@ final class KeyboardViewController: UIInputViewController {
         observers.append(Handoff.observeStateChanges { [weak self] in
             DispatchQueue.main.async { self?.refreshState() }
         })
+        observers.append(Handoff.observeToneChanges { [weak self] in
+            DispatchQueue.main.async { self?.refreshTone() }
+        })
     }
 
     deinit {
@@ -89,6 +96,7 @@ final class KeyboardViewController: UIInputViewController {
     override func viewWillAppear(_ animated: Bool) {
         super.viewWillAppear(animated)
         isVisible = true
+        refreshTone()
         lastClaim = Date()
         handoff?.claimKeyboard(instanceToken)
         refreshState()
@@ -368,6 +376,26 @@ final class KeyboardViewController: UIInputViewController {
         status.text = "Open OpenFlow to turn on Full Access, then this keyboard can receive your text."
     }
 
+    /// Show whatever the app last recorded, so the two surfaces never disagree
+    /// about which register the next utterance will be written in.
+    private func refreshTone() {
+        guard hasFullAccess, let tone = handoff?.tone() else { return }
+        let index = Tone.allCases.firstIndex(of: tone) ?? 0
+        if tonePicker.selectedSegmentIndex != index {
+            tonePicker.selectedSegmentIndex = index
+        }
+    }
+
+    @objc private func toneChanged() {
+        guard hasFullAccess else { return }
+        let picked = Tone.allCases[tonePicker.selectedSegmentIndex]
+        handoff?.setTone(picked)
+        // The app applies this on its next transcription; nothing here has to
+        // wait for it, so say so immediately rather than leaving the tap
+        // looking unregistered.
+        flash("\(picked.name) — applies to the next dictation")
+    }
+
     @objc private func deleteTapped() { textDocumentProxy.deleteBackward() }
     @objc private func spaceTapped() { textDocumentProxy.insertText(" ") }
     @objc private func returnTapped() { textDocumentProxy.insertText("\n") }
@@ -413,7 +441,13 @@ final class KeyboardViewController: UIInputViewController {
 
         openAppKey.didMove(toParent: self)
 
-        let stack = UIStackView(arrangedSubviews: [status, primary, bottom])
+        tonePicker = UISegmentedControl(items: Tone.allCases.map(\.name))
+        tonePicker.selectedSegmentIndex = 0
+        tonePicker.setTitleTextAttributes(
+            [.font: UIFont.systemFont(ofSize: 12)], for: .normal)
+        tonePicker.addTarget(self, action: #selector(toneChanged), for: .valueChanged)
+
+        let stack = UIStackView(arrangedSubviews: [status, tonePicker, primary, bottom])
         stack.axis = .vertical
         stack.spacing = 10
         stack.translatesAutoresizingMaskIntoConstraints = false
@@ -424,6 +458,7 @@ final class KeyboardViewController: UIInputViewController {
             stack.trailingAnchor.constraint(equalTo: view.trailingAnchor, constant: -8),
             stack.topAnchor.constraint(equalTo: view.topAnchor, constant: 8),
             stack.bottomAnchor.constraint(equalTo: view.bottomAnchor, constant: -8),
+            tonePicker.heightAnchor.constraint(equalToConstant: 30),
             primary.heightAnchor.constraint(equalToConstant: 64),
             bottom.heightAnchor.constraint(equalToConstant: 42),
         ])

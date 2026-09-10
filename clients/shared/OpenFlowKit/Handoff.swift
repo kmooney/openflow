@@ -302,6 +302,36 @@ public struct Handoff {
         return parts[1] == token
     }
 
+    // MARK: - tone
+    //
+    // Tone is documented as "a per-utterance choice, not a setting" — you
+    // dictate a work email and a text to your partner minutes apart. A
+    // per-utterance choice has to be reachable from wherever the utterance
+    // happens, which is the keyboard, not an app the user left several minutes
+    // ago. So it lives in the container and either side may set it.
+
+    private var toneURL: URL { directory.appendingPathComponent("tone") }
+
+    /// Posted when either side changes the tone, so the other redraws.
+    public static let toneChangedName = "dev.openflow.tone"
+
+    public func setTone(_ tone: Tone) {
+        try? Data("\(tone.rawValue)".utf8).write(to: toneURL, options: .atomic)
+        Self.post(Self.toneChangedName)
+    }
+
+    /// The shared tone, or nil if nobody has ever chosen one.
+    public func tone() -> Tone? {
+        guard let raw = try? String(contentsOf: toneURL, encoding: .utf8),
+              let value = UInt32(raw.trimmingCharacters(in: .whitespacesAndNewlines))
+        else { return nil }
+        return Tone(rawValue: value)
+    }
+
+    public static func observeToneChanges(_ handler: @escaping () -> Void) -> NSObjectProtocol {
+        observe(name: toneChangedName, handler)
+    }
+
     /// Take the pending transcript, if any, and remove it.
     ///
     /// One-shot by construction: reading deletes. The keyboard is asked for

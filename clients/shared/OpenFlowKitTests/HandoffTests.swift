@@ -305,3 +305,67 @@ final class MicrophoneIdlePolicyTests: XCTestCase {
             now: now, isRecording: false, isThinking: false))
     }
 }
+
+// MARK: - tone, shared both ways
+//
+// Tone is "a per-utterance choice, not a setting" by its own definition, so it
+// has to be reachable from the keyboard as well as the app — and a choice made
+// on either side has to be visible to the other.
+
+extension HandoffTests {
+
+    func testToneIsUnsetUntilChosen() throws {
+        let (handoff, dir) = try makeHandoff()
+        defer { try? FileManager.default.removeItem(at: dir) }
+
+        XCTAssertNil(handoff.tone(), "nobody has chosen, so there is nothing to report")
+    }
+
+    func testToneRoundTrips() throws {
+        let (handoff, dir) = try makeHandoff()
+        defer { try? FileManager.default.removeItem(at: dir) }
+
+        handoff.setTone(.veryCasual)
+        XCTAssertEqual(handoff.tone(), .veryCasual)
+    }
+
+    func testLatestChoiceWins() throws {
+        let (handoff, dir) = try makeHandoff()
+        defer { try? FileManager.default.removeItem(at: dir) }
+
+        handoff.setTone(.formal)
+        handoff.setTone(.casual)
+        XCTAssertEqual(handoff.tone(), .casual)
+    }
+
+    /// A container written by an older build, or corrupted, must not decide the
+    /// register someone's message is written in.
+    func testUnreadableToneReadsAsUnset() throws {
+        let (handoff, dir) = try makeHandoff()
+        defer { try? FileManager.default.removeItem(at: dir) }
+
+        try Data("banana".utf8).write(to: dir.appendingPathComponent("tone"))
+        XCTAssertNil(handoff.tone())
+    }
+
+    func testToneChangesAreAnnouncedOnTheirOwnChannel() {
+        let toneFired = expectation(description: "tone")
+        let stateFired = expectation(description: "state")
+        stateFired.isInverted = true
+
+        let toneToken = Handoff.observeToneChanges { toneFired.fulfill() }
+        let stateToken = Handoff.observeStateChanges { stateFired.fulfill() }
+        defer {
+            Handoff.removeObserver(toneToken)
+            Handoff.removeObserver(stateToken)
+        }
+
+        let dir = URL(fileURLWithPath: NSTemporaryDirectory())
+            .appendingPathComponent("of-tone-\(UUID().uuidString)")
+        try? FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: dir) }
+        Handoff(directory: dir).setTone(.casual)
+
+        wait(for: [toneFired, stateFired], timeout: 2)
+    }
+}
