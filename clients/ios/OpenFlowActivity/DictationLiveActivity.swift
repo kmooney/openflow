@@ -32,7 +32,7 @@ struct DictationLiveActivity: Widget {
                     }
                 }
                 DynamicIslandExpandedRegion(.trailing) {
-                    timer(context.state)
+                    timer(context.state, markSize: 22)
                         .font(.title3.monospacedDigit())
                         .foregroundStyle(context.state.recording ? .red : .secondary)
                 }
@@ -46,7 +46,7 @@ struct DictationLiveActivity: Widget {
             } compactTrailing: {
                 // The number the user asked for, in the only place they can see
                 // it from inside another app.
-                timer(context.state)
+                timer(context.state, markSize: 16)
                     .font(.caption.monospacedDigit())
                     .foregroundStyle(context.state.recording ? .red : .secondary)
                     .frame(maxWidth: 44)
@@ -65,7 +65,7 @@ struct DictationLiveActivity: Widget {
                 Text(hint(state)).font(.caption).foregroundStyle(.secondary)
             }
             Spacer()
-            timer(state)
+            timer(state, markSize: 24)
                 .font(.title2.monospacedDigit())
                 .foregroundStyle(state.recording ? .red : .secondary)
         }
@@ -80,14 +80,22 @@ struct DictationLiveActivity: Widget {
     /// Counts by itself from the origin it is given. The app is in the
     /// background whenever this matters and cannot push a new number every
     /// second — nor should it have to.
+    ///
+    /// When nothing is being recorded there is no number to show, and the word
+    /// "open" was doing nothing the status line beside it did not already say.
+    /// The mark is better use of the space: it says *whose* microphone is lit,
+    /// which is the one question the system's own indicator cannot answer.
     @ViewBuilder
-    private func timer(_ state: DictationActivityAttributes.ContentState) -> some View {
+    private func timer(_ state: DictationActivityAttributes.ContentState,
+                       markSize: CGFloat) -> some View {
         if state.recording {
             Text(timerInterval: state.since...Date.distantFuture,
                  pauseTime: nil, countsDown: false, showsHours: false)
                 .multilineTextAlignment(.trailing)
         } else {
-            Text("open")
+            // Sized per call site rather than by the font: the mark is shapes,
+            // and shapes do not read `.font()`.
+            OpenFlowMark().frame(width: markSize, height: markSize)
         }
     }
 
