@@ -1,6 +1,7 @@
 import AppKit
 import AVFoundation
 import Combine
+import SwiftUI
 import OpenFlowKit
 
 @MainActor
@@ -204,10 +205,34 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
     private func setIcon(idle: Bool) {
         guard let b = statusItem.button else { return }
-        b.image = NSImage(systemSymbolName: idle ? "mic" : "mic.fill",
-                          accessibilityDescription: "OpenFlow")
+        b.image = Self.markImage
+        // A template image takes its colour from the menu bar, so idle needs no
+        // tint at all and follows light and dark by itself. Recording overrides
+        // it, which is the only state worth colouring.
         b.contentTintColor = idle ? nil : .systemRed
     }
+
+    /// The menu-bar mark, rendered once from the same `OpenFlowMark` the Live
+    /// Activity and the app icon use.
+    ///
+    /// Rendered rather than drawn again in AppKit: `ImageRenderer` means the
+    /// geometry has exactly one definition in Swift, so the menu bar cannot
+    /// drift away from the icon the way two hand-drawn copies would. Marked as
+    /// a template so macOS tints it for the menu bar it actually finds itself
+    /// in — black on a light bar, white on a dark one, without asking.
+    private static let markImage: NSImage? = {
+        let side: CGFloat = 18                    // the menu bar's usual glyph box
+        let renderer = ImageRenderer(content:
+            OpenFlowMark()
+                .frame(width: side, height: side)
+                .foregroundStyle(.black))         // alpha is what a template uses
+        renderer.scale = 2
+        guard let cg = renderer.cgImage else { return nil }
+        let image = NSImage(cgImage: cg, size: NSSize(width: side, height: side))
+        image.isTemplate = true
+        image.accessibilityDescription = "OpenFlow"
+        return image
+    }()
 
     private func buildMenu() {
         guard let model else { return }

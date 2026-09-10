@@ -211,55 +211,53 @@ fn tooltip(state: &MenuState, recording: bool, seconds: f64) -> String {
 /// binary blobs in the repository; the shape is a capsule and two strokes.
 fn make_icon(recording: bool) -> Option<Icon> {
     const SIZE: i32 = 32;
+    let s = SIZE as f32;
     let (r, g, b) = if recording {
         (232, 62, 52) // the same red the Mac tints its icon while listening
     } else {
         (240, 240, 240) // light, because the notification area is dark by default
     };
 
+    // The OpenFlow mark: a ring with a waveform inside it. Proportions are
+    // `tools/icon.swift`'s, which is also what the Mac menu bar and the iOS
+    // Live Activity draw -- one mark everywhere. Change it in one place and
+    // change it in all of them.
+    let (cx, cy) = (s / 2.0, s / 2.0);
+    let radius = 0.355 * s;
+    let stroke = 0.085 * s; // heavier at this size, or the ring greys out
+    let bar_w = 0.055 * s;
+    let pitch = bar_w + 0.038 * s;
+    let halves = [0.085, 0.150, 0.215, 0.150, 0.085];
+    let start_x = cx - pitch * 2.0;
+
+    // Drawn from signed distances rather than filled spans, so the edges are
+    // antialiased. At 32 pixels a hard-edged ring this thin looks broken.
     let mut rgba = vec![0u8; (SIZE * SIZE * 4) as usize];
-    let mut put = |x: i32, y: i32, alpha: u8| {
-        if (0..SIZE).contains(&x) && (0..SIZE).contains(&y) {
-            let i = ((y * SIZE + x) * 4) as usize;
+    for py in 0..SIZE {
+        for px in 0..SIZE {
+            let x = px as f32 + 0.5;
+            let y = py as f32 + 0.5;
+
+            let (dx, dy) = (x - cx, y - cy);
+            let mut d = ((dx * dx + dy * dy).sqrt() - radius).abs() - stroke / 2.0;
+
+            for (i, half) in halves.iter().enumerate() {
+                let bx = start_x + pitch * i as f32;
+                // A vertical capsule: distance to the segment, less its radius.
+                let reach = (half * s - bar_w / 2.0).max(0.0);
+                let qy = ((y - cy).abs() - reach).max(0.0);
+                let qx = x - bx;
+                d = d.min((qx * qx + qy * qy).sqrt() - bar_w / 2.0);
+            }
+
+            // One pixel of coverage either side of the edge.
+            let alpha = (0.5 - d).clamp(0.0, 1.0);
+            let i = ((py * SIZE + px) * 4) as usize;
             rgba[i] = r;
             rgba[i + 1] = g;
             rgba[i + 2] = b;
-            rgba[i + 3] = alpha;
+            rgba[i + 3] = (alpha * 255.0).round() as u8;
         }
-    };
-
-    // The capsule: a 10-wide, 16-tall rounded body.
-    let (cx, top, bottom, radius) = (16, 5, 19, 5);
-    for y in top..=bottom {
-        for x in (cx - radius)..=(cx + radius) {
-            let dx = (x - cx) as f32;
-            let inside = if y < top + radius {
-                let dy = (y - (top + radius)) as f32;
-                dx * dx + dy * dy <= (radius * radius) as f32
-            } else if y > bottom - radius {
-                let dy = (y - (bottom - radius)) as f32;
-                dx * dx + dy * dy <= (radius * radius) as f32
-            } else {
-                dx.abs() <= radius as f32
-            };
-            if inside {
-                put(x, y, 255);
-            }
-        }
-    }
-    // The cradle: an arc under the capsule, and the stand.
-    for x in (cx - 8)..=(cx + 8) {
-        let dx = (x - cx) as f32 / 8.0;
-        let y = 21 + (3.0 * (1.0 - dx * dx).max(0.0).sqrt()) as i32;
-        put(x, y, 255);
-        put(x, y - 1, 200);
-    }
-    for y in 24..=28 {
-        put(cx, y, 255);
-        put(cx - 1, y, 160);
-    }
-    for x in (cx - 4)..=(cx + 4) {
-        put(x, 28, 255);
     }
 
     Icon::from_rgba(rgba, SIZE as u32, SIZE as u32).ok()
