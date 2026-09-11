@@ -1,0 +1,43 @@
+//! Paragraphs the polish model produced must survive the deterministic pass.
+//!
+//! They did not: `apply_addresses` and `apply_quotes` each flattened the whole
+//! message with `split_whitespace`, so the model laid out a two-paragraph
+//! email and the formatter put it straight back into one block, two stages
+//! later, with nothing in the audit trail pointing at it.
+
+use openflow_core::*;
+
+const EMAIL: &str = "Hi, Cynthia. I hope this email finds you well.\n\nI'd be delighted if this could be included. Thanks again for your time. Best, Kevin.";
+
+#[test]
+fn paragraphs_survive_every_tone() {
+    for tone in [Tone::Formal, Tone::Casual, Tone::VeryCasual] {
+        let (formatted, _) = format_with_edits(EMAIL, &Config::default());
+        let out = apply_letter_layout(&formatted, tone);
+        // Case-insensitive: the very casual register lower-cases everything,
+        // so the assertion is about the break, not the capital.
+        assert!(out.to_lowercase().contains("\n\ni'd be delighted"),
+                "paragraph lost for {tone:?}:\n{out}");
+    }
+}
+
+#[test]
+fn the_address_pass_keeps_newlines() {
+    let s = "Go to kevin dash mooney dot com.\n\nThen tell me.";
+    let out = apply_addresses(s);
+    assert!(out.contains("kevin-mooney.com"), "the address must still be rebuilt: {out}");
+    assert!(out.contains("\n\nThen tell me"), "the paragraph must survive: {out}");
+}
+
+#[test]
+fn the_quote_pass_keeps_newlines() {
+    assert!(apply_quotes("One.\n\nTwo.").contains("\n\nTwo"));
+}
+
+/// Several paragraphs, not just two.
+#[test]
+fn many_paragraphs_survive() {
+    let s = "One.\n\nTwo.\n\nThree.\n\nFour.";
+    let (out, _) = format_with_edits(s, &Config::default());
+    assert_eq!(out.matches("\n\n").count(), 3, "got: {out:?}");
+}

@@ -644,7 +644,19 @@ fn build_address(span: &[String], last: &str) -> String {
 }
 
 /// Rebuild spoken web and email addresses.
+///
+/// Line by line, because `split_whitespace` over the whole message eats every
+/// newline in it. That silently flattened the polish model's paragraphs back
+/// into one block — the model did the work and this threw it away, two stages
+/// later, where nothing in the audit trail pointed at it.
 pub fn apply_addresses(s: &str) -> String {
+    s.split('\n')
+        .map(apply_addresses_line)
+        .collect::<Vec<_>>()
+        .join("\n")
+}
+
+fn apply_addresses_line(s: &str) -> String {
     let toks: Vec<&str> = s.split_whitespace().collect();
     if toks.len() < 2 {
         return s.to_string();
@@ -975,7 +987,12 @@ pub fn split_signature(s: &str) -> (String, Option<(String, String)>) {
             if !boundary {
                 continue;
             }
-            let body = toks[..start].join(" ").trim().to_string();
+            // Sliced from the original, not rejoined from tokens. Rejoining
+            // replaced every run of whitespace with a single space, so a
+            // message the polish model had laid out in paragraphs came back as
+            // one block — the last stage quietly undoing the one before it.
+            let body_end = toks[start].as_ptr() as usize - s.as_ptr() as usize;
+            let body = s[..body_end].trim().to_string();
             let name = toks[name_start..]
                 .iter()
                 .map(|t| bare(t))
@@ -1158,6 +1175,15 @@ fn split_trailing_punct(t: &str) -> (&str, &str) {
 /// otherwise stop at the first word that ends a noun phrase. Capped at 6 words.
 /// Closing punctuation moves inside the quotes (US convention).
 pub fn apply_quotes(s: &str) -> String {
+    // Per line, for the same reason `apply_addresses` is: flattening the
+    // message destroys its paragraphs.
+    s.split('\n')
+        .map(apply_quotes_line)
+        .collect::<Vec<_>>()
+        .join("\n")
+}
+
+fn apply_quotes_line(s: &str) -> String {
     let toks: Vec<String> = s.split_whitespace().map(|t| t.to_string()).collect();
     let mut out: Vec<String> = Vec::new();
     let mut i = 0;
