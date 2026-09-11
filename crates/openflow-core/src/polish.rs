@@ -13,24 +13,32 @@
 
 /// What the model is told, and what it is told not to do.
 ///
-/// Three rules, in the order they matter:
+/// **Deliberately permissive about small edits.** An earlier version said "fix
+/// only transcription artefacts, do not add, remove, or reword" and was so
+/// narrow it did nothing: two real emails in a row came back byte-identical,
+/// one of them still carrying the abandoned opening "I wanted to...". A stage
+/// that costs two and a half seconds and changes nothing is worse than no
+/// stage at all.
 ///
-/// 1. **Repair only.** A model asked to "improve" dictation rewrites it, and a
-///    rewrite of someone's message is not a transcription of it.
-/// 2. **Use the known terms exactly.** This is the whole reason vocabulary is
-///    passed at all: a garbled address is a matching problem when the right
-///    string is in front of the model, and a guessing problem when it is not.
-/// 3. **Answer with the text alone.** Small models narrate otherwise, and a
-///    preamble pasted into someone's message is worse than no polish.
+/// The licence is justified by how the tool is used: short text, pasted where
+/// the user is already looking, reviewed before it is sent. A small edit that
+/// is wrong costs a correction; a false start left in costs the same
+/// correction, and the tool exists to save typing.
+///
+/// What stays absolute is the last rule. Adding content is the one failure the
+/// user cannot catch by reading, because invented text reads exactly like
+/// text they wrote.
 const INSTRUCTIONS: &str = "\
-You repair dictation. A speech recogniser produced the line below; it often \
+You tidy dictation. A speech recogniser produced the line below; it often \
 writes punctuation and spelled-out letters as words (\"dot\", \"dash\", \
 \"colon\", \"at\", \"k e v i n\").
 
-Rewrite it as the text the speaker meant.
-- Fix only transcription artefacts. Do not add, remove, or reword content.
+Rewrite it as the text the speaker meant to write.
+- Fix transcription mistakes, and drop abandoned false starts and filler words.
 - Rebuild web and email addresses. If one matches a known term, use that term exactly.
-- Reply with the corrected text only. No preamble, no explanation, no quotes.";
+- Start a new paragraph where the subject changes.
+- Keep the speaker\'s words and meaning. Do not add anything they did not say.
+- Reply with the text only. No preamble, no explanation, no quotes.";
 
 /// A narrower job, for models too small for the full repair.
 ///
@@ -86,10 +94,15 @@ pub fn prompt(transcript: &str, vocabulary: &[String], style: Style) -> String {
 pub fn clean(reply: &str, transcript: &str) -> String {
     let mut s = reply.trim();
 
-    // Qwen3 emits its reasoning inline unless thinking is disabled, and
-    // disabling it is a per-model flag the caller may not have set.
+    // Qwen3 emits its reasoning inline unless thinking is disabled.
     if let Some(end) = s.find("</think>") {
         s = s[end + "</think>".len()..].trim();
+    } else if s.contains("<think>") {
+        // Opened and never closed: the model spent its whole token budget
+        // reasoning and never reached an answer. Measured on Qwen3 0.6B, which
+        // burned all 256 tokens describing what it was about to do. There is no
+        // answer in there to salvage.
+        return transcript.trim().to_string();
     }
 
     // "Here is the rewritten line:" and friends.
@@ -134,11 +147,11 @@ pub fn clean(reply: &str, transcript: &str) -> String {
     // phrases, so switching a model to the narrower prompt would have let it
     // echo *those* instructions straight into someone's message instead.
     const ECHOES: &[&str] = &[
-        // the full repair
-        "Fix only transcription artefacts",
-        "Reply with the corrected text only",
+        // the full tidy
+        "Fix transcription mistakes",
+        "drop abandoned false starts",
         "Rebuild web and email addresses",
-        "You repair dictation",
+        "You tidy dictation",
         "Known terms:",
         // the narrower job
         "Tidy this dictated text",
@@ -260,8 +273,8 @@ mod echo_tests {
     #[test]
     fn a_prompt_echo_falls_back_to_the_transcript() {
         let transcript = "so I think we should be good to go";
-        let echo = "- Fix only transcription artefacts. Do not add, remove, or reword content.\n\
-                    - Reply with the corrected text only. No preamble, no explanation, no quotes.";
+        let echo = "- Fix transcription mistakes, and drop abandoned false starts and filler words.\n\
+                    - Rebuild web and email addresses. If one matches a known term, use that term exactly.";
         assert_eq!(clean(echo, transcript), transcript);
     }
 
@@ -292,13 +305,13 @@ mod style_tests {
         assert!(p.contains("email or web address"));
         assert!(!p.contains("Known terms"),
                 "a model that cannot follow three rules will not use a glossary");
-        assert!(!p.contains("transcription artefacts"));
+        assert!(!p.contains("transcription mistakes"));
     }
 
     #[test]
     fn repair_is_unchanged() {
         let p = prompt("hello", &["a-term".to_string()], Style::Repair);
-        assert!(p.contains("Fix only transcription artefacts"));
+        assert!(p.contains("Fix transcription mistakes"));
         assert!(p.contains("Known terms: a-term"));
     }
 }
@@ -319,5 +332,26 @@ mod tidy_echo_tests {
         ] {
             assert_eq!(clean(echo, t), t, "not caught: {echo}");
         }
+    }
+}
+
+#[cfg(test)]
+mod unclosed_think_tests {
+    use super::clean;
+
+    /// Qwen3 0.6B burning its whole token budget on reasoning, verbatim in
+    /// shape: a `<think>` that never closes because the answer never arrived.
+    #[test]
+    fn reasoning_that_never_finishes_falls_back() {
+        let t = "Hi John, I hope this finds you well.";
+        let all_thinking = "<think>\nOkay, let's start by looking at the original line \
+                            and the corrections needed. First, the line starts with";
+        assert_eq!(clean(all_thinking, t), t);
+    }
+
+    /// Closed reasoning still yields whatever followed it.
+    #[test]
+    fn closed_reasoning_yields_the_answer() {
+        assert_eq!(clean("<think>hmm</think>\nHi John,", "x"), "Hi John,");
     }
 }

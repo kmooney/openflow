@@ -281,12 +281,13 @@ public final class DictationEngine {
         // Which instructions this particular model gets. Looked up from the
         // catalogue by filename, because the engine knows a path and the
         // catalogue knows what that model can actually do.
-        let simple = PolishCatalog.all.first {
+        let entry = PolishCatalog.all.first {
             $0.filename == (polishModelPath as NSString).lastPathComponent
-        }?.needsSimplePrompt ?? false
+        }
         guard let polisher,
               let out = polisher.polish(raw, vocabulary: vocabulary,
-                                        simplePrompt: simple) else {
+                                        simplePrompt: entry?.needsSimplePrompt ?? false,
+                                        promptSuffix: entry?.promptSuffix ?? "") else {
             return raw
         }
         let rate = polisher.lastTokensPerSecond

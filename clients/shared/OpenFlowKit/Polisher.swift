@@ -55,9 +55,9 @@ public final class Polisher {
     /// a sentence sometimes writes an essay instead, and that is paid for in
     /// seconds the user spends waiting.
     public func polish(_ transcript: String, vocabulary: [String] = [],
-                       simplePrompt: Bool = false,
+                       simplePrompt: Bool = false, promptSuffix: String = "",
                        maxTokens: Int = 256) -> String? {
-        let prompt = sharedPrompt(transcript, vocabulary, simplePrompt)
+        let prompt = sharedPrompt(transcript, vocabulary, simplePrompt) + promptSuffix
         #if DEBUG
         NSLog("openflow: polish prompt is %d chars", prompt.count)
         #endif
