@@ -46,7 +46,7 @@ public enum PolishCatalog {
             filename: "SmolLM2-360M-Instruct-Q4_K_M.gguf",
             displayName: "SmolLM2 360M",
             bytes: 270_590_880,
-            note: "The smallest on offer. Removes filler words and little else — untested against addresses, and too small to be trusted with them.",
+            note: "Too small for this job: it repeats the instructions back instead of following them, measured both on a phone and on a desktop. Listed because it downloads in seconds and proves the pipeline runs.",
             downloadURL: URL(string: "https://huggingface.co/bartowski/SmolLM2-360M-Instruct-GGUF/resolve/main/SmolLM2-360M-Instruct-Q4_K_M.gguf")!,
             rebuildsAddresses: false),
         PolishModel(

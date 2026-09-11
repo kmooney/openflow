@@ -1,3 +1,4 @@
+import Foundation
 import SwiftUI
 import OpenFlowKit
 
@@ -27,6 +28,15 @@ struct OpenFlowApp: App {
             ?? support.appendingPathComponent("models/ggml-base.en.bin").path
 
         let engine = DictationEngine(modelPath: modelPath, store: store)
+        // Whatever the user last chose, or nothing. "Nothing" is a supported
+        // state, not a missing file: the deterministic rules still run.
+        engine.polishModelPath = polish.activeURL?.path ?? ""
+        NSLog("openflow: polish at launch — selected=%@ installed=%@ path=%@",
+              polish.selectedID, polish.installed.sorted().joined(separator: ","),
+              polish.activeURL?.path ?? "(none)")
+        polish.onSelectionChanged = { [weak engine] url in
+            engine?.polishModelPath = url.path
+        }
         engine.supportDirectory = support
         engine.warmUp()
         models.onSelectionChanged = { [weak engine] url in engine?.useModel(at: url.path) }

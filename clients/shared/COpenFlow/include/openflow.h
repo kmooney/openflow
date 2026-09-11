@@ -11,6 +11,15 @@ char *of_format(const char *input, unsigned int tone);
 void  of_string_free(char *p);
 const char *of_version(void);
 
+/// Build the polish prompt. `vocabulary` is newline-separated and may be NULL.
+/// Returns owned UTF-8; free with of_string_free. Never null.
+char *of_polish_prompt(const char *transcript, const char *vocabulary);
+
+/// Salvage usable text from a model reply, falling back to the transcript when
+/// the reply is empty, a refusal, or obviously not a repair.
+/// Returns owned UTF-8; free with of_string_free. Never null.
+char *of_polish_clean(const char *reply, const char *transcript);
+
 #ifdef __cplusplus
 }
 #endif

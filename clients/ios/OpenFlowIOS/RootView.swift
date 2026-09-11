@@ -80,8 +80,14 @@ struct RootView: View {
                 if state.stats.latencyMS > 0 {
                     Stat(value: String(format: "%.1f×", state.stats.realtimeFactor),
                          label: "realtime")
-                    Stat(value: String(format: "%.0f", state.stats.wordsPerSecond),
-                         label: "words/sec")
+                    Stat(value: state.stats.wordsPerMinute.formatted(.number.precision(.fractionLength(0))),
+                         label: "words/min")
+                }
+                // Only once a polish model has actually run. An empty slot is
+                // better than a fabricated zero.
+                if state.polishTokensPerSecond > 0 {
+                    Stat(value: String(format: "%.0f", state.polishTokensPerSecond),
+                         label: "tok/sec")
                 }
             }
             .padding(.horizontal, 18)
@@ -217,6 +223,23 @@ struct Stat: View {
     }
 }
 
+/// Turn a stored filename back into the catalogue's display name.
+///
+/// The filename is what gets stored, because it is what the engine has and it
+/// stays meaningful even after a model is deleted or the catalogue changes.
+/// Nil for an empty value, so "no polish model" shows nothing rather than a
+/// blank chip.
+private func modelName(_ filename: String) -> String? {
+    guard !filename.isEmpty else { return nil }
+    if let m = ModelCatalog.all.first(where: { $0.filename == filename }) {
+        return m.displayName
+    }
+    if let m = PolishCatalog.all.first(where: { $0.filename == filename }) {
+        return m.displayName
+    }
+    return (filename as NSString).deletingPathExtension
+}
+
 struct HistoryList: View {
     @ObservedObject var state: AppState
 
@@ -233,6 +256,18 @@ struct HistoryList: View {
                             Text("\(u.spokenWords) words")
                         } else {
                             Label("nothing captured", systemImage: "waveform.slash")
+                        }
+                        // Which models produced this one. Worth showing beside
+                        // the word count rather than in a detail view: the
+                        // whole reason both are user-choosable is to compare
+                        // them, and a comparison you have to tap through is one
+                        // nobody makes.
+                        if let speech = modelName(u.speechModel) {
+                            Text(speech)
+                        }
+                        if let polish = modelName(u.polishModel) {
+                            Label(polish, systemImage: "wand.and.sparkles")
+                                .labelStyle(.titleAndIcon)
                         }
                         Spacer()
                     }

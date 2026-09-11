@@ -1,0 +1,4 @@
+module CLlamaShim {
+    umbrella header "include/ofllama.h"
+    export *
+}

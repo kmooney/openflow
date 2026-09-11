@@ -97,6 +97,22 @@ pub fn clean(reply: &str, transcript: &str) -> String {
         s = c.as_str().trim();
     }
 
+    // A model too small to follow the instruction repeats it instead. Measured
+    // on SmolLM2 360M, which returns the bullet list verbatim both on a phone
+    // and through ollama on a desktop -- so this is the model's ceiling, not a
+    // delivery problem. Pasting the instructions into someone's message is the
+    // worst outcome available, and it is cheap to refuse.
+    const ECHOES: &[&str] = &[
+        "Fix only transcription artefacts",
+        "Reply with the corrected text only",
+        "Rebuild web and email addresses",
+        "You repair dictation",
+        "Known terms:",
+    ];
+    if ECHOES.iter().any(|e| s.contains(e)) {
+        return transcript.trim().to_string();
+    }
+
     // A refusal, an empty answer, or an essay: keep what the user said. Losing
     // the utterance is far worse than leaving it unpolished, and an answer
     // several times longer than the input is never a repair.
@@ -196,5 +212,34 @@ mod preamble_tests {
         ] {
             assert_eq!(clean(s, s), s, "wrongly stripped: {s}");
         }
+    }
+}
+
+#[cfg(test)]
+mod echo_tests {
+    use super::clean;
+
+    /// What SmolLM2 360M actually returns, verbatim.
+    #[test]
+    fn a_prompt_echo_falls_back_to_the_transcript() {
+        let transcript = "so I think we should be good to go";
+        let echo = "- Fix only transcription artefacts. Do not add, remove, or reword content.\n\
+                    - Reply with the corrected text only. No preamble, no explanation, no quotes.";
+        assert_eq!(clean(echo, transcript), transcript);
+    }
+
+    #[test]
+    fn a_partial_echo_is_caught_too() {
+        let t = "meet me at noon";
+        assert_eq!(clean("Known terms: kevin-mooney.com\n\nLine:\nmeet", t), t);
+    }
+
+    /// And a genuine repair still passes through untouched.
+    #[test]
+    fn a_real_answer_survives() {
+        assert_eq!(
+            clean("https://kevin-mooney.com", "k e v i n dot com"),
+            "https://kevin-mooney.com"
+        );
     }
 }

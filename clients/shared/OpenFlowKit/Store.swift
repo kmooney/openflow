@@ -17,6 +17,11 @@ public struct Utterance: Sendable {
     public let audioPath: String?
     /// "ok", or why nothing came out: "no-speech", "empty".
     public let outcome: String
+    /// Which models produced this. Stored per utterance rather than read from
+    /// current settings, because the settings are the ones in force *now* and
+    /// the whole point of history is what was true then.
+    public let speechModel: String
+    public let polishModel: String
 }
 
 public struct Stats: Sendable {
@@ -37,11 +42,11 @@ public struct Stats: Sendable {
         latencyMS > 0 ? secondsTranscribed / (Double(latencyMS) / 1000) : 0
     }
 
-    /// Words produced per second of work. The nearest honest equivalent of
-    /// tokens per second for the speech stage, and directly comparable with the
-    /// polish model's rate once there is one.
-    public var wordsPerSecond: Double {
-        latencyMS > 0 ? Double(spokenWords) / (Double(latencyMS) / 1000) : 0
+    /// Words produced per minute of work. Per minute rather than per second
+    /// because dictation is measured against typing, and nobody knows their
+    /// own words per second.
+    public var wordsPerMinute: Double {
+        latencyMS > 0 ? Double(spokenWords) / (Double(latencyMS) / 1000) * 60 : 0
     }
 }
 
@@ -85,6 +90,8 @@ public final class Store {
         // column already exists.
         exec("ALTER TABLE utterances ADD COLUMN audio_path TEXT;")
         exec("ALTER TABLE utterances ADD COLUMN outcome TEXT NOT NULL DEFAULT 'ok';")
+        exec("ALTER TABLE utterances ADD COLUMN speech_model TEXT NOT NULL DEFAULT '';")
+        exec("ALTER TABLE utterances ADD COLUMN polish_model TEXT NOT NULL DEFAULT '';")
     }
 
     deinit { if let db { sqlite3_close(db) } }
@@ -103,6 +110,7 @@ public final class Store {
 
     @discardableResult
     public func record(raw: String, final: String, tone: Tone, spokenWords: Int,
+                       speechModel: String = "", polishModel: String = "",
                        durationMS: Int, latencyMS: Int, guardrailPassed: Bool,
                        ledger: String, appContext: String?, audioPath: String? = nil,
                        outcome: String = "ok") -> Int64 {
@@ -110,8 +118,9 @@ public final class Store {
             let sql = """
             INSERT INTO utterances
               (created_at,duration_ms,raw_text,final_text,tone,spoken_words,
-               latency_ms,guardrail_passed,ledger,app_context,audio_path,outcome)
-            VALUES (?,?,?,?,?,?,?,?,?,?,?,?);
+               latency_ms,guardrail_passed,ledger,app_context,audio_path,outcome,
+               speech_model,polish_model)
+            VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?);
             """
             var st: OpaquePointer?
             guard sqlite3_prepare_v2(db, sql, -1, &st, nil) == SQLITE_OK else { return -1 }
@@ -136,6 +145,8 @@ public final class Store {
                 sqlite3_bind_null(st, 11)
             }
             sqlite3_bind_text(st, 12, outcome, -1, SQLITE_TRANSIENT)
+            sqlite3_bind_text(st, 13, speechModel, -1, SQLITE_TRANSIENT)
+            sqlite3_bind_text(st, 14, polishModel, -1, SQLITE_TRANSIENT)
             guard sqlite3_step(st) == SQLITE_DONE else { return -1 }
             return sqlite3_last_insert_rowid(db)
         }
@@ -177,7 +188,8 @@ public final class Store {
             let filter = query.trimmingCharacters(in: .whitespaces)
             let sql = """
             SELECT id,created_at,duration_ms,raw_text,final_text,tone,spoken_words,
-                   latency_ms,guardrail_passed,ledger,audio_path,outcome
+                   latency_ms,guardrail_passed,ledger,audio_path,outcome,
+                   speech_model,polish_model
             FROM utterances
             \(filter.isEmpty ? "" : "WHERE raw_text LIKE ?1 OR final_text LIKE ?1")
             ORDER BY created_at DESC LIMIT ?2 OFFSET ?3;
@@ -207,7 +219,8 @@ public final class Store {
                     guardrailPassed: sqlite3_column_int(st, 8) == 1,
                     ledger: text(9),
                     audioPath: sqlite3_column_type(st, 10) == SQLITE_NULL ? nil : text(10),
-                    outcome: text(11).isEmpty ? "ok" : text(11)))
+                    outcome: text(11).isEmpty ? "ok" : text(11),
+                    speechModel: text(12), polishModel: text(13)))
             }
             return out
         }

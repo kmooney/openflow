@@ -19,6 +19,9 @@ final class AppState: ObservableObject {
     @Published private(set) var state: DictationState = .idle
     @Published private(set) var elapsed: TimeInterval = 0
     @Published private(set) var inputDB: Float = -120
+    /// Tokens per second from the last polish run. Zero until a model has run
+    /// once, which is why the stat only appears after it has.
+    @Published private(set) var polishTokensPerSecond: Double = 0
     @Published var status = ""
     @Published var query = "" { didSet { reloadHistory() } }
     @Published var tone: Tone {

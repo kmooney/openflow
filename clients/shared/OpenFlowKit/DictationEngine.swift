@@ -29,6 +29,9 @@ public final class DictationEngine {
     private let recorder = AudioRecorder()
     private let store: Store
     private var transcriber: Transcriber?
+    #if canImport(CLlamaShim)
+    private var polisher: Polisher?
+    #endif
     private var modelPath: String
     private let work = DispatchQueue(label: "openflow.dictation", qos: .userInitiated)
 
@@ -54,6 +57,24 @@ public final class DictationEngine {
     /// the OS's -- see NoiseReduction for why. Safe to leave on: it returns a
     /// clean recording untouched.
     public var noiseReduction = true
+    /// The polish model, or empty for none. Set from the user's choice in the
+    /// model picker; changing it drops the loaded weights and reloads lazily.
+    public var polishModelPath: String = "" {
+        didSet {
+            guard polishModelPath != oldValue else { return }
+            NSLog("openflow: polish model set to |%@|", polishModelPath)
+            work.async { [self] in
+                #if canImport(CLlamaShim)
+                polisher = nil
+                #endif
+            }
+        }
+    }
+    /// Tokens per second from the last polish run, or 0 if none. Measured, and
+    /// published because the whole reason the model is a choice is that this
+    /// number differs wildly between devices.
+    public private(set) var lastPolishTokensPerSecond: Double = 0
+
     /// Whether to run whisper on the GPU.
     ///
     /// **iOS will not let a backgrounded app use the GPU**, and transcribing
@@ -239,6 +260,35 @@ public final class DictationEngine {
         }
     }
 
+    /// Run the polish model, if the user chose one.
+    ///
+    /// Returns the transcript unchanged on every failure path — no model, a
+    /// model that would not load, a reply that was not a repair. Losing what
+    /// someone said to a formatting stage is far worse than leaving it
+    /// unpolished, which is the same rule the formatter itself follows.
+    private func polished(_ raw: String, vocabulary: [String]) -> String {
+        #if canImport(CLlamaShim)
+        guard !polishModelPath.isEmpty else { return raw }
+        if polisher == nil {
+            NSLog("openflow: loading the polish model (gpu=%@)", preferGPU ? "yes" : "no")
+            polisher = Polisher(modelPath: polishModelPath, useGPU: preferGPU)
+            NSLog("openflow: polish model %@", polisher == nil ? "FAILED to load" : "loaded")
+            if polisher == nil {
+                NSLog("openflow: could not load the polish model at %@", polishModelPath)
+                return raw
+            }
+        }
+        guard let polisher, let out = polisher.polish(raw, vocabulary: vocabulary) else {
+            return raw
+        }
+        let rate = polisher.lastTokensPerSecond
+        DispatchQueue.main.async { self.lastPolishTokensPerSecond = rate }
+        return out
+        #else
+        return raw
+        #endif
+    }
+
     /// Stop recording and throw the audio away. The microphone stays open.
     ///
     /// Nothing is written to history: this is the user saying "forget that",
@@ -334,6 +384,8 @@ public final class DictationEngine {
                 NSLog("openflow: giving up — %@ [%@] after %d ms",
                       message, outcome, Int(Date().timeIntervalSince(t0) * 1000))
                 store.record(raw: "", final: "", tone: tone, spokenWords: 0,
+                             speechModel: (modelPath as NSString).lastPathComponent,
+                             polishModel: (polishModelPath as NSString).lastPathComponent,
                              durationMS: audioMS, latencyMS: Int(Date().timeIntervalSince(t0) * 1000),
                              guardrailPassed: true, ledger: "[]", appContext: appContext,
                              audioPath: audioPath, outcome: outcome)
@@ -409,13 +461,33 @@ public final class DictationEngine {
                             : "no words recognised")
             }
 
-            let result = Formatter.format(raw, tone: tone)
+            // whisper -> polish -> deterministic formatting.
+            //
+            // The model runs before the rules, not after: tone and structure
+            // are the user's explicit choice, and a model asked to "polish"
+            // casual text quietly formalises it back. Applying them last means
+            // nothing downstream can undo them.
+            let polished = self.polished(raw, vocabulary: vocab)
+            let result = Formatter.format(polished, tone: tone)
             #if DEBUG
             // The pipeline, stage by stage. DEBUG only on purpose: this is the
             // user's speech, and an app whose whole claim is that nothing
             // leaves the device should not be writing transcripts into the
             // system log on a shipping build.
             NSLog("openflow: heard  |%@|", raw)
+            // Always, including when nothing happened. Logging only the change
+            // made "no model selected", "model failed to load" and "model
+            // returned the same text" indistinguishable — three different
+            // problems that all look like silence.
+            if polishModelPath.isEmpty {
+                NSLog("openflow: polish skipped — no model selected")
+            } else if polished == raw {
+                NSLog("openflow: polish made no change (%@)",
+                      (polishModelPath as NSString).lastPathComponent)
+            } else {
+                NSLog("openflow: polish |%@| (%.1f tok/s)", polished,
+                      self.lastPolishTokensPerSecond)
+            }
             NSLog("openflow: format |%@|%@", result.formatted,
                   result.ok ? "" : " (note: \(result.note))")
             #endif
@@ -427,7 +499,10 @@ public final class DictationEngine {
                 .flatMap { String(data: $0, encoding: .utf8) } ?? "[]"
 
             store.record(raw: result.raw, final: result.formatted, tone: tone,
-                         spokenWords: result.spokenWords, durationMS: audioMS,
+                         spokenWords: result.spokenWords,
+                         speechModel: (modelPath as NSString).lastPathComponent,
+                         polishModel: (polishModelPath as NSString).lastPathComponent,
+                         durationMS: audioMS,
                          latencyMS: latencyMS, guardrailPassed: result.ok,
                          ledger: ledgerJSON, appContext: appContext,
                          audioPath: audioPath, outcome: "ok")

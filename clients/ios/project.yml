@@ -21,6 +21,8 @@ targets:
     platform: iOS
     sources:
       - path: ../shared/OpenFlowKit
+      # The one translation unit that includes llama.h. See ofllama.c.
+      - path: ../shared/CLlamaShim/ofllama.c
     info:
       path: OpenFlowKit-Info.plist
       properties:
@@ -32,6 +34,8 @@ targets:
       # framework, and linking without embedding produces an app that builds
       # cleanly and dies at launch with "Library missing".
       - framework: ../Frameworks/whisper.xcframework
+        embed: false
+      - framework: ../Frameworks/llama.xcframework
         embed: false
       - sdk: AVFoundation.framework
       - sdk: Accelerate.framework
@@ -45,8 +49,8 @@ targets:
       # SWIFT_INCLUDE_PATHS alone; it has to be handed the file. Applied to
       # every target, because importing OpenFlowKit pulls its module
       # dependencies in transitively.
-      OTHER_SWIFT_FLAGS: -Xcc -fmodule-map-file=$(SRCROOT)/../shared/CWhisper/module.modulemap -Xcc -fmodule-map-file=$(SRCROOT)/../shared/COpenFlow/module.modulemap -Xcc -I$(SRCROOT)/../shared/CWhisper/include -Xcc -I$(SRCROOT)/../shared/COpenFlow/include
-      HEADER_SEARCH_PATHS: $(SRCROOT)/../shared/CWhisper/include $(SRCROOT)/../shared/COpenFlow/include
+      OTHER_SWIFT_FLAGS: -Xcc -fmodule-map-file=$(SRCROOT)/../shared/CWhisper/module.modulemap -Xcc -fmodule-map-file=$(SRCROOT)/../shared/CLlamaShim/module.modulemap -Xcc -fmodule-map-file=$(SRCROOT)/../shared/COpenFlow/module.modulemap -Xcc -I$(SRCROOT)/../shared/CWhisper/include -Xcc -I$(SRCROOT)/../shared/CLlamaShim -Xcc -I$(SRCROOT)/../shared/CLlama/include -Xcc -I$(SRCROOT)/../shared/COpenFlow/include
+      HEADER_SEARCH_PATHS: $(SRCROOT)/../shared/CWhisper/include $(SRCROOT)/../shared/CLlama/include $(SRCROOT)/../shared/CLlamaShim $(SRCROOT)/../shared/COpenFlow/include
       DEFINES_MODULE: YES
       SWIFT_VERSION: "5.9"
       MARKETING_VERSION: "0.1.0"
@@ -111,6 +115,9 @@ targets:
       - framework: ../Frameworks/whisper.xcframework
         embed: true
         codeSign: true
+      - framework: ../Frameworks/llama.xcframework
+        embed: true
+        codeSign: true
     settings:
       PRODUCT_BUNDLE_IDENTIFIER: dev.openflow.ios
       ASSETCATALOG_COMPILER_APPICON_NAME: AppIcon
@@ -118,8 +125,8 @@ targets:
       # SWIFT_INCLUDE_PATHS alone; it has to be handed the file. Applied to
       # every target, because importing OpenFlowKit pulls its module
       # dependencies in transitively.
-      OTHER_SWIFT_FLAGS: -Xcc -fmodule-map-file=$(SRCROOT)/../shared/CWhisper/module.modulemap -Xcc -fmodule-map-file=$(SRCROOT)/../shared/COpenFlow/module.modulemap -Xcc -I$(SRCROOT)/../shared/CWhisper/include -Xcc -I$(SRCROOT)/../shared/COpenFlow/include
-      HEADER_SEARCH_PATHS: $(SRCROOT)/../shared/CWhisper/include $(SRCROOT)/../shared/COpenFlow/include
+      OTHER_SWIFT_FLAGS: -Xcc -fmodule-map-file=$(SRCROOT)/../shared/CWhisper/module.modulemap -Xcc -fmodule-map-file=$(SRCROOT)/../shared/CLlamaShim/module.modulemap -Xcc -fmodule-map-file=$(SRCROOT)/../shared/COpenFlow/module.modulemap -Xcc -I$(SRCROOT)/../shared/CWhisper/include -Xcc -I$(SRCROOT)/../shared/CLlamaShim -Xcc -I$(SRCROOT)/../shared/CLlama/include -Xcc -I$(SRCROOT)/../shared/COpenFlow/include
+      HEADER_SEARCH_PATHS: $(SRCROOT)/../shared/CWhisper/include $(SRCROOT)/../shared/CLlama/include $(SRCROOT)/../shared/CLlamaShim $(SRCROOT)/../shared/COpenFlow/include
       MARKETING_VERSION: "0.1.0"
       CURRENT_PROJECT_VERSION: "1"
       SWIFT_VERSION: "5.9"
@@ -147,8 +154,8 @@ targets:
       # SWIFT_INCLUDE_PATHS alone; it has to be handed the file. Applied to
       # every target, because importing OpenFlowKit pulls its module
       # dependencies in transitively.
-      OTHER_SWIFT_FLAGS: -Xcc -fmodule-map-file=$(SRCROOT)/../shared/CWhisper/module.modulemap -Xcc -fmodule-map-file=$(SRCROOT)/../shared/COpenFlow/module.modulemap -Xcc -I$(SRCROOT)/../shared/CWhisper/include -Xcc -I$(SRCROOT)/../shared/COpenFlow/include
-      HEADER_SEARCH_PATHS: $(SRCROOT)/../shared/CWhisper/include $(SRCROOT)/../shared/COpenFlow/include
+      OTHER_SWIFT_FLAGS: -Xcc -fmodule-map-file=$(SRCROOT)/../shared/CWhisper/module.modulemap -Xcc -fmodule-map-file=$(SRCROOT)/../shared/CLlamaShim/module.modulemap -Xcc -fmodule-map-file=$(SRCROOT)/../shared/COpenFlow/module.modulemap -Xcc -I$(SRCROOT)/../shared/CWhisper/include -Xcc -I$(SRCROOT)/../shared/CLlamaShim -Xcc -I$(SRCROOT)/../shared/CLlama/include -Xcc -I$(SRCROOT)/../shared/COpenFlow/include
+      HEADER_SEARCH_PATHS: $(SRCROOT)/../shared/CWhisper/include $(SRCROOT)/../shared/CLlama/include $(SRCROOT)/../shared/CLlamaShim $(SRCROOT)/../shared/COpenFlow/include
       MARKETING_VERSION: "0.1.0"
       CURRENT_PROJECT_VERSION: "1"
       SWIFT_VERSION: "5.9"
@@ -185,8 +192,8 @@ targets:
       # SWIFT_INCLUDE_PATHS alone; it has to be handed the file. Applied to
       # every target, because importing OpenFlowKit pulls its module
       # dependencies in transitively.
-      OTHER_SWIFT_FLAGS: -Xcc -fmodule-map-file=$(SRCROOT)/../shared/CWhisper/module.modulemap -Xcc -fmodule-map-file=$(SRCROOT)/../shared/COpenFlow/module.modulemap -Xcc -I$(SRCROOT)/../shared/CWhisper/include -Xcc -I$(SRCROOT)/../shared/COpenFlow/include
-      HEADER_SEARCH_PATHS: $(SRCROOT)/../shared/CWhisper/include $(SRCROOT)/../shared/COpenFlow/include
+      OTHER_SWIFT_FLAGS: -Xcc -fmodule-map-file=$(SRCROOT)/../shared/CWhisper/module.modulemap -Xcc -fmodule-map-file=$(SRCROOT)/../shared/CLlamaShim/module.modulemap -Xcc -fmodule-map-file=$(SRCROOT)/../shared/COpenFlow/module.modulemap -Xcc -I$(SRCROOT)/../shared/CWhisper/include -Xcc -I$(SRCROOT)/../shared/CLlamaShim -Xcc -I$(SRCROOT)/../shared/CLlama/include -Xcc -I$(SRCROOT)/../shared/COpenFlow/include
+      HEADER_SEARCH_PATHS: $(SRCROOT)/../shared/CWhisper/include $(SRCROOT)/../shared/CLlama/include $(SRCROOT)/../shared/CLlamaShim $(SRCROOT)/../shared/COpenFlow/include
       MARKETING_VERSION: "0.1.0"
       CURRENT_PROJECT_VERSION: "1"
       SWIFT_VERSION: "5.9"

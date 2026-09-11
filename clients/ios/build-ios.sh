@@ -26,6 +26,20 @@ xcodebuild -create-xcframework \
   -library "$ROOT/target/aarch64-apple-ios-sim/release/libopenflow_ffi.a" -headers "$ROOT/crates/openflow-ffi/include" \
   -output "$FRAMEWORKS/OpenFlowFFI.xcframework" >/dev/null
 
+# llama.cpp, for the polish stage. Same arrangement as whisper: a third-party
+# checkout that builds its own xcframework, copied in once and left alone.
+LLAMA=$ROOT/m0/llama.cpp
+if [ ! -d "$FRAMEWORKS/llama.xcframework" ]; then
+  if [ ! -d "$LLAMA" ]; then
+    echo "==> cloning llama.cpp"
+    git clone --depth 1 https://github.com/ggml-org/llama.cpp.git "$LLAMA" >/dev/null 2>&1
+  fi
+  echo "==> llama.xcframework (slow: builds ggml for every slice)"
+  (cd "$LLAMA" && ./build-xcframework.sh >/dev/null 2>&1)
+  cp -R "$LLAMA/build-apple/llama.xcframework" "$FRAMEWORKS/" 2>/dev/null \
+    || { echo "   llama.xcframework not produced; see $LLAMA/build-apple"; exit 1; }
+fi
+
 if [ ! -d "$FRAMEWORKS/whisper.xcframework" ]; then
   echo "==> whisper.xcframework (slow: builds ggml for every slice)"
   (cd "$WHISPER" && ./build-xcframework.sh >/dev/null 2>&1)
