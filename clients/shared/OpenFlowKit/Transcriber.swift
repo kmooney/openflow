@@ -147,18 +147,25 @@ public final class Transcriber {
                     lastParagraphThresholdMS = threshold
                     lastSegmentGaps = gaps.sorted(by: >).prefix(6).map { $0 }
 
-                    var breaks: [Double] = []
-                    for (i, word) in words.enumerated() {
-                        if i > 0, gaps[i - 1] >= threshold {
-                            // Trim the space whisper puts before a token, or
-                            // every paragraph starts with one.
-                            result = result.trimmingCharacters(in: .whitespaces)
-                            result += "\n\n"
-                            result += word.text.trimmingCharacters(in: .whitespaces)
-                            breaks.append(Double(word.start) / 1000)
-                        } else {
-                            result += word.text
-                        }
+                    // The transcript is joined plainly. Pauses are measured and
+                    // reported, but no longer break anything.
+                    //
+                    // whisper's heuristic token timestamps are not dependable
+                    // enough to act on. Measured on one email: seven
+                    // consecutive words — "I", "'d", "be", "delighted", "if",
+                    // "this" — all claiming to start at 0:24, with computed
+                    // gaps of 5840, 5700, 5420, 5140ms between them. Those are
+                    // not pauses, and a threshold derived from them adapts
+                    // itself to nonsense and hits its ceiling.
+                    //
+                    // The polish model does this job well once its prompt asks
+                    // for an email layout, which is where paragraph breaking
+                    // now lives. Accurate token timing needs DTW alignment and
+                    // a per-model head preset; if that is ever added, this is
+                    // the place it plugs back in.
+                    let breaks: [Double] = []
+                    for word in words {
+                        result += word.text
                     }
                     lastParagraphBreaks = breaks
                 }
