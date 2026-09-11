@@ -70,6 +70,47 @@ public enum SignalStats {
         return peak > 0 ? 20 * log10(peak) : -120
     }
 
+    /// How long the speaker was quiet across a given moment, in milliseconds.
+    ///
+    /// The pause signal lives here, in the audio, and not where it was first
+    /// looked for. whisper's segment timestamps are *contiguous* — each
+    /// segment's end is the next one's start — so the gaps between them are
+    /// always zero and say nothing about silence. Measured on a real
+    /// utterance: nine boundaries, nine zeros.
+    ///
+    /// The floor is taken from this recording rather than fixed, for the same
+    /// reason the paragraph threshold is: a quiet room and a café have
+    /// different ideas of silence, and the level this app captures at moved 25
+    /// dB in one afternoon.
+    public static func silenceRun(_ samples: [Float], aroundMS: Int64,
+                                  sampleRate: Int = 16_000) -> Int64 {
+        let frame = sampleRate / 50                       // 20 ms
+        guard samples.count >= frame * 3 else { return 0 }
+
+        var levels: [Float] = []
+        var i = 0
+        while i + frame <= samples.count {
+            levels.append(rms(samples[i..<(i + frame)]))
+            i += frame
+        }
+        guard levels.count > 4 else { return 0 }
+
+        // The noise floor of this recording, times a margin: speech is far
+        // above it, and room tone sits just at it.
+        var ordered = levels
+        ordered.sort()
+        let floorLevel = max(ordered[ordered.count / 10] * 2.5, 0.0008)
+
+        let centre = Int((aroundMS * Int64(sampleRate) / 1000)) / frame
+        guard centre >= 0, centre < levels.count, levels[centre] < floorLevel else { return 0 }
+
+        var first = centre, last = centre
+        while first > 0, levels[first - 1] < floorLevel { first -= 1 }
+        while last + 1 < levels.count, levels[last + 1] < floorLevel { last += 1 }
+
+        return Int64((last - first + 1) * 1000 / 50)
+    }
+
     /// Scale a recording up so whisper hears it at a sensible level.
     ///
     /// The microphone is not the problem and there is no gain knob to turn:

@@ -551,6 +551,9 @@ public final class DictationEngine {
                          breakTimes: transcriber.lastParagraphBreaks
                              .map { String(format: "%.1f", $0) }
                              .joined(separator: ","),
+                         pauses: transcriber.lastSegmentGaps
+                             .map { "\($0)" }.joined(separator: ",")
+                             + ";\(transcriber.lastParagraphThresholdMS)",
                          durationMS: audioMS,
                          latencyMS: latencyMS, guardrailPassed: result.ok,
                          ledger: ledgerJSON, appContext: appContext,

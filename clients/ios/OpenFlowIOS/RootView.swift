@@ -254,6 +254,25 @@ private func heardStage(_ u: Utterance) -> some View {
     .textSelection(.enabled)
 }
 
+/// The silence that was measured, and the bar it had to clear.
+///
+/// Visible because a paragraph break that does not happen looks identical to a
+/// feature that is switched off, and the difference is one number.
+@ViewBuilder
+private func pauseStage(_ pauses: String) -> some View {
+    let parts = pauses.split(separator: ";", maxSplits: 1)
+    if parts.count == 2, !parts[0].isEmpty {
+        HStack(alignment: .firstTextBaseline, spacing: 4) {
+            Image(systemName: "pause").font(.caption2)
+            Text("pauses").font(.caption2.weight(.medium))
+            Text("\(parts[0]) · break at \(parts[1]) ms")
+                .font(.caption2.monospacedDigit())
+        }
+        .foregroundStyle(.tertiary)
+        .textSelection(.enabled)
+    }
+}
+
 private func stamp(_ seconds: Double) -> String {
     String(format: "%d:%02d", Int(seconds) / 60, Int(seconds) % 60)
 }
@@ -336,6 +355,7 @@ struct HistoryList: View {
                         if !u.rawText.isEmpty, u.rawText != u.finalText {
                             heardStage(u)
                         }
+                        pauseStage(u.pauses)
                         if !u.polishedText.isEmpty, u.polishedText != u.finalText {
                             stage("wand.and.sparkles", "polished", u.polishedText)
                         }

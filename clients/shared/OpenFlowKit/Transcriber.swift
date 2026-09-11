@@ -35,6 +35,13 @@ public final class Transcriber {
     /// not a feature.
     public private(set) var lastParagraphBreaks: [Double] = []
 
+    /// The silence measured at each segment boundary. Kept so the app can show
+    /// why a paragraph did or did not break — a detection nobody can inspect
+    /// is one nobody can tune.
+    public private(set) var lastSegmentGaps: [Int64] = []
+    /// First and last word time of each segment, in ms.
+    public private(set) var lastSegmentSpans: [(Int64, Int64)] = []
+
     public init?(modelPath: String, useGPU: Bool = true) {
         var cp = whisper_context_default_params()
         cp.use_gpu = useGPU
@@ -88,6 +95,12 @@ public final class Transcriber {
                 // paused; this used to throw that away and then ask a language
                 // model to guess it back.
                 p.no_timestamps = false
+                // Per-token times. The gap between one word ending and the
+                // next beginning IS the pause, and unlike measuring silence in
+                // the audio it does not care about the noise floor — which
+                // automatic gain control lifts until a quiet room and a held
+                // breath look the same.
+                p.token_timestamps = true
                 p.translate = false
                 p.language = lptr
                 p.suppress_blank = true
@@ -104,42 +117,48 @@ public final class Transcriber {
 
                     // Segment text plus the silence before it. whisper reports
                     // times in centiseconds.
-                    var pieces: [String] = []
-                    var gaps: [Int64] = []
-                    var previousEnd: Int64 = -1
+                    // Every token, in order, with the silence before it.
+                    //
+                    // Not segment boundaries: whisper clamps the last token of
+                    // a segment to end exactly where the next one starts, so
+                    // the gap there is always zero. Measured: six segments,
+                    // spans 0-8040, 8040-13430, 13480-23040 — contiguous.
+                    // The pauses are *inside* the segments, and the token times
+                    // there are not clamped to anything.
+                    var words: [(text: String, start: Int64, end: Int64)] = []
                     for i in 0..<whisper_full_n_segments(ctx) {
-                        guard let t = whisper_full_get_segment_text(ctx, i) else { continue }
-                        let start = whisper_full_get_segment_t0(ctx, i) * 10
-                        if previousEnd >= 0 { gaps.append(max(0, start - previousEnd)) }
-                        previousEnd = whisper_full_get_segment_t1(ctx, i) * 10
-                        pieces.append(String(cString: t))
+                        for k in 0..<whisper_full_n_tokens(ctx, i) {
+                            let d = whisper_full_get_token_data(ctx, i, k)
+                            guard d.id < whisper_token_eot(ctx),
+                                  let raw = whisper_full_get_token_text(ctx, i, k)
+                            else { continue }
+                            words.append((String(cString: raw), d.t0 * 10, d.t1 * 10))
+                        }
                     }
 
-                    // The threshold comes from this speaker's own pauses: a
-                    // brisk talker's new-thought gap is shorter than a slow
-                    // talker's comma, so any constant is wrong for someone.
+                    var gaps: [Int64] = []
+                    for i in 1..<max(1, words.count) {
+                        gaps.append(max(0, words[i].start - words[i - 1].end))
+                    }
+
                     let threshold = gaps.withUnsafeBufferPointer {
                         of_paragraph_threshold_ms($0.baseAddress, $0.count)
                     }
                     lastParagraphThresholdMS = threshold
-                    #if DEBUG
-                    if !gaps.isEmpty {
-                        NSLog("openflow: segment gaps %@ → paragraph at %lld ms",
-                              gaps.map(String.init).joined(separator: ","), threshold)
-                    }
-                    #endif
+                    lastSegmentGaps = gaps.sorted(by: >).prefix(6).map { $0 }
 
                     var breaks: [Double] = []
-                    var starts: [Int64] = []
-                    for i in 0..<whisper_full_n_segments(ctx) {
-                        starts.append(whisper_full_get_segment_t0(ctx, i) * 10)
-                    }
-                    for (i, piece) in pieces.enumerated() {
+                    for (i, word) in words.enumerated() {
                         if i > 0, gaps[i - 1] >= threshold {
+                            // Trim the space whisper puts before a token, or
+                            // every paragraph starts with one.
+                            result = result.trimmingCharacters(in: .whitespaces)
                             result += "\n\n"
-                            breaks.append(Double(starts[i]) / 1000)
+                            result += word.text.trimmingCharacters(in: .whitespaces)
+                            breaks.append(Double(word.start) / 1000)
+                        } else {
+                            result += word.text
                         }
-                        result += piece
                     }
                     lastParagraphBreaks = breaks
                 }

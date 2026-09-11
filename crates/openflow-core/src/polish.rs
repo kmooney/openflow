@@ -77,7 +77,23 @@ pub enum Style {
 /// leaves a wall of text, while a spurious one chops a sentence in half.
 pub const PARAGRAPH_GAP_MS: i64 = 700;
 
+/// Ignore anything below this when describing a speaker: words inside a phrase
+/// run together with no measurable gap at all, and a distribution made mostly
+/// of zeros has a median of zero and an inter-quartile range of zero.
+///
+/// Measured on a real 89-word email: the word gaps were 1580, 620, 620, 580,
+/// 580, 580 and a long tail of zeros. Including the zeros put the threshold on
+/// its floor and split the message mid-sentence, between "Hi" and ", Cynthia".
+const PAUSE_NOISE_MS: i64 = 120;
+
 /// Never break on a pause shorter than this, however brisk the speaker.
+///
+/// Deliberately low, and only a backstop. Raising it to 700 — above the
+/// 580-620ms sentence pauses measured in real speech — looked reasonable and
+/// was wrong: it is not adaptive, and it stopped a fast talker's genuine
+/// 520ms paragraph pause from ever breaking. Once the zeros are excluded the
+/// distribution separates sentence pauses from paragraph pauses on its own,
+/// for fast and slow speakers alike, and this never has to fire.
 const PARAGRAPH_FLOOR_MS: i64 = 350;
 /// Never require one longer than this, however slow.
 const PARAGRAPH_CEILING_MS: i64 = 2_500;
@@ -98,10 +114,13 @@ const PARAGRAPH_MIN_SAMPLES: usize = 4;
 /// a pathological distribution cannot produce a nonsense threshold, and backed
 /// by the fixed default when there are too few gaps to describe anything.
 pub fn paragraph_threshold_ms(gaps: &[i64]) -> i64 {
-    if gaps.len() < PARAGRAPH_MIN_SAMPLES {
+    // Only real pauses describe a speaker. The gap between two words of the
+    // same phrase is zero, and there are far more of those than of anything
+    // interesting.
+    let mut sorted: Vec<i64> = gaps.iter().copied().filter(|g| *g >= PAUSE_NOISE_MS).collect();
+    if sorted.len() < PARAGRAPH_MIN_SAMPLES {
         return PARAGRAPH_GAP_MS;
     }
-    let mut sorted: Vec<i64> = gaps.to_vec();
     sorted.sort_unstable();
 
     let at = |frac: f64| -> i64 {
@@ -529,5 +548,45 @@ mod paragraph_tests {
         assert!(paragraph_threshold_ms(&[0, 0, 0, 0, 0, 0]) >= PARAGRAPH_FLOOR_MS);
         assert!(paragraph_threshold_ms(&[0, 0, 0, 60_000, 60_000, 60_000])
                 <= PARAGRAPH_CEILING_MS);
+    }
+}
+
+#[cfg(test)]
+mod real_pause_tests {
+    use super::*;
+
+    /// The gaps from a real 89-word dictated email, plus the long tail of
+    /// zeros between words of the same phrase. Including those zeros put the
+    /// threshold on its floor and broke the message between "Hi" and
+    /// ", Cynthia".
+    fn measured() -> Vec<i64> {
+        let mut g = vec![1580, 620, 620, 580, 580, 580, 300, 240, 180];
+        g.extend(std::iter::repeat(0).take(60));
+        g
+    }
+
+    #[test]
+    fn the_long_pause_breaks_and_the_sentence_pauses_do_not() {
+        let t = paragraph_threshold_ms(&measured());
+        assert!(is_paragraph_gap(1580, t), "the real pause must break (threshold {t})");
+        assert!(!is_paragraph_gap(620, t), "a sentence pause must not (threshold {t})");
+    }
+
+    /// Zeros must not drag the threshold down, which is what put it on the
+    /// floor and split the message mid-sentence.
+    #[test]
+    fn silence_between_syllables_is_not_a_sample() {
+        let with_zeros = paragraph_threshold_ms(&measured());
+        let without: Vec<i64> = measured().into_iter().filter(|g| *g > 0).collect();
+        assert_eq!(with_zeros, paragraph_threshold_ms(&without));
+    }
+
+    /// Nothing but ordinary speech: no pause stands out, so nothing breaks.
+    #[test]
+    fn unbroken_speech_produces_no_breaks() {
+        let mut g = vec![200, 180, 220, 190, 210, 200];
+        g.extend(std::iter::repeat(0).take(40));
+        let t = paragraph_threshold_ms(&g);
+        assert!(g.iter().all(|x| !is_paragraph_gap(*x, t)), "threshold {t} broke even speech");
     }
 }
