@@ -2052,7 +2052,12 @@ pub fn split_salutation(s: &str) -> (Option<String>, String) {
                     && b.chars().all(|c| c.is_alphabetic())
                     && b.chars().next().map(|c| c.is_uppercase()).unwrap_or(false)
             });
-            if !all_names || !toks[end - 1].ends_with(',') {
+            // A comma or a full stop. Requiring a comma meant "Hi Cynthia."
+            // was not a salutation, so it kept its place at the head of the
+            // body and never got its blank line — and a polish model writes a
+            // full stop there as often as a comma.
+            let closes = toks[end - 1].ends_with(',') || toks[end - 1].ends_with('.');
+            if !all_names || !closes {
                 continue;
             }
             let sal = toks[..end].join(" ");

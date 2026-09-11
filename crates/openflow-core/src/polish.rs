@@ -193,6 +193,37 @@ pub fn prompt(transcript: &str, vocabulary: &[String], style: Style) -> String {
     out
 }
 
+/// Turn `[text](target)` back into plain text.
+///
+/// Dictation is pasted into mail clients and message boxes, where markdown is
+/// not rendered — so a link a model helpfully formatted arrives as literal
+/// punctuation around the address.
+fn unwrap_markdown_links(s: &str) -> String {
+    let mut out = String::with_capacity(s.len());
+    let bytes: Vec<char> = s.chars().collect();
+    let mut i = 0;
+    while i < bytes.len() {
+        if bytes[i] == '[' {
+            if let Some(close) = bytes[i + 1..].iter().position(|c| *c == ']') {
+                let close = i + 1 + close;
+                if close + 1 < bytes.len() && bytes[close + 1] == '(' {
+                    if let Some(end) = bytes[close + 2..].iter().position(|c| *c == ')') {
+                        let end = close + 2 + end;
+                        // The visible text is what was said; the target is the
+                        // model's decoration.
+                        out.extend(&bytes[i + 1..close]);
+                        i = end + 1;
+                        continue;
+                    }
+                }
+            }
+        }
+        out.push(bytes[i]);
+        i += 1;
+    }
+    out
+}
+
 /// Salvage usable text from whatever the model returned.
 ///
 /// Small models ignore "reply with the text only" often enough that this is not
@@ -233,6 +264,12 @@ pub fn clean(reply: &str, transcript: &str) -> String {
             s = tail.trim();
         }
     }
+
+    // Markdown link syntax. Qwen3 0.6B turned a plain address into
+    // "[https://kevin-mooney.com](https://kevin-mooney.com)", which is not a
+    // link anywhere someone dictates — it is four brackets in their email.
+    let unwrapped = unwrap_markdown_links(s);
+    let mut s: &str = &unwrapped;
 
     // Models quote their answer even when told not to.
     let quoted = (s.starts_with('"') && s.ends_with('"'))
@@ -600,5 +637,34 @@ mod real_pause_tests {
         g.extend(std::iter::repeat(0).take(40));
         let t = paragraph_threshold_ms(&g);
         assert!(g.iter().all(|x| !is_paragraph_gap(*x, t)), "threshold {t} broke even speech");
+    }
+}
+
+#[cfg(test)]
+mod markdown_tests {
+    use super::clean;
+
+    /// Verbatim from Qwen3 0.6B: it turned a plain address into a markdown
+    /// link, which in an email is four brackets around the address.
+    #[test]
+    fn markdown_links_are_unwrapped() {
+        let out = clean(
+            "Find it at [https://kevin-mooney.com](https://kevin-mooney.com). Thanks.",
+            "Find it at https://kevin-mooney.com. Thanks.");
+        assert!(!out.contains('['), "brackets survived: {out}");
+        assert!(out.contains("https://kevin-mooney.com"), "{out}");
+    }
+
+    #[test]
+    fn named_links_keep_the_words_that_were_said() {
+        let out = clean("See [my essay](https://example.com) for more.", "x");
+        assert_eq!(out, "See my essay for more.");
+    }
+
+    /// Brackets that are not a link must survive untouched.
+    #[test]
+    fn ordinary_brackets_are_left_alone() {
+        let s = "Take the first option [the cheaper one] if you can.";
+        assert_eq!(clean(s, s), s);
     }
 }
