@@ -2077,6 +2077,37 @@ pub fn split_salutation(s: &str) -> (Option<String>, String) {
 /// The salutation break is suppressed in `VeryCasual`, which is the texting
 /// register -- "Hey John," followed by a blank line is email shape, and a text
 /// message should not acquire one. Formal and casual get it.
+/// Break a long unbroken body into paragraphs, every few sentences.
+///
+/// A floor, not a strategy. Paragraphing properly needs to know where the
+/// subject changes, which is why it was asked of a language model and of the
+/// speaker's own pauses — and both turned out to be unreliable: a 0.6B model
+/// ignores the instruction, and whisper's token timing is sound on one
+/// utterance and collapsed on the next.
+///
+/// This knows nothing about meaning and cannot: it just refuses to hand back a
+/// wall of text. Only fires on a body long enough to need it and only when
+/// nothing above it produced a single break, so a model that does the job
+/// properly is never overruled.
+pub fn ensure_paragraphs(body: &str, min_words: usize, per_paragraph: usize) -> String {
+    if body.contains("\n\n") || body.split_whitespace().count() < min_words {
+        return body.to_string();
+    }
+    let sentences = split_sentences(body);
+    if sentences.len() <= per_paragraph {
+        return body.to_string();
+    }
+    sentences
+        .chunks(per_paragraph)
+        .map(|c| c.join(" "))
+        .collect::<Vec<_>>()
+        .join("\n\n")
+}
+
+/// Sentences per paragraph, and the length at which it starts mattering.
+pub const PARAGRAPH_SENTENCES: usize = 3;
+pub const PARAGRAPH_MIN_WORDS: usize = 55;
+
 pub fn apply_letter_layout(s: &str, tone: Tone) -> String {
     let (sal, rest) = if tone == Tone::VeryCasual {
         (None, s.to_string())
@@ -2084,6 +2115,7 @@ pub fn apply_letter_layout(s: &str, tone: Tone) -> String {
         split_salutation(s)
     };
     let body = apply_tone_with_signature(&rest, tone);
+    let body = ensure_paragraphs(&body, PARAGRAPH_MIN_WORDS, PARAGRAPH_SENTENCES);
     match sal {
         None => body,
         Some(sal) => format!("{}\n\n{}", sal, body),
