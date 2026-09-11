@@ -18,6 +18,12 @@ public final class ModelStore: ObservableObject {
 
     private let directory: URL
     private let bundle: Bundle
+    /// What this store knows how to hold. Defaults to the speech models, so
+    /// every existing call site is unchanged.
+    private let catalog: [any DownloadableModel]
+    /// Kept apart per store, or the polish selection would overwrite the
+    /// speech selection the moment either changed.
+    private let defaultsKey: String
     private var tasks: [String: URLSessionDownloadTask] = [:]
     private var delegates: [String: DownloadDelegate] = [:]
 
@@ -28,10 +34,14 @@ public final class ModelStore: ObservableObject {
     /// a model inside the app and starts there; macOS ships none and prefers
     /// the bigger one M0 measured as the desktop default.
     public init(directory: URL, bundle: Bundle = .main,
-                defaultID: String = ModelCatalog.bundledID) {
+                defaultID: String = ModelCatalog.bundledID,
+                catalog: [any DownloadableModel] = ModelCatalog.all,
+                defaultsKey: String = "selectedModel") {
         self.directory = directory
         self.bundle = bundle
-        self.selectedID = UserDefaults.standard.string(forKey: "selectedModel") ?? defaultID
+        self.catalog = catalog
+        self.defaultsKey = defaultsKey
+        self.selectedID = UserDefaults.standard.string(forKey: defaultsKey) ?? defaultID
         try? FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
         refresh()
         // A model can be deleted out from under the selection, and on macOS the
@@ -46,12 +56,12 @@ public final class ModelStore: ObservableObject {
     /// a Set, so that picked a different model between launches for anyone
     /// holding two of them.
     private func bestInstalled() -> String? {
-        ModelCatalog.all.first { installed.contains($0.id) }?.id
+        catalog.first { installed.contains($0.id) }?.id
     }
 
     public func refresh() {
         var present = Set<String>()
-        for model in ModelCatalog.all where location(of: model.id) != nil {
+        for model in catalog where location(of: model.id) != nil {
             present.insert(model.id)
         }
         installed = present
@@ -79,13 +89,13 @@ public final class ModelStore: ObservableObject {
     public func select(_ id: String) {
         guard let url = location(of: id) else { return }
         selectedID = id
-        UserDefaults.standard.set(id, forKey: "selectedModel")
+        UserDefaults.standard.set(id, forKey: defaultsKey)
         onSelectionChanged?(url)
     }
 
     // MARK: - download
 
-    public func download(_ model: WhisperModel) {
+    public func download(_ model: any DownloadableModel) {
         guard tasks[model.id] == nil, location(of: model.id) == nil else { return }
         lastError = nil
         let destination = directory.appendingPathComponent(model.filename)
@@ -163,7 +173,7 @@ public final class ModelStore: ObservableObject {
             select(next)
         } else {
             selectedID = ""          // nothing usable; activeURL is nil
-            UserDefaults.standard.removeObject(forKey: "selectedModel")
+            UserDefaults.standard.removeObject(forKey: defaultsKey)
         }
     }
 

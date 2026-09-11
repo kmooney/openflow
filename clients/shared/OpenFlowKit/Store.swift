@@ -24,6 +24,25 @@ public struct Stats: Sendable {
     public let spokenWords: Int
     public let secondsSpoken: Double
     public let todayWords: Int
+    /// Total milliseconds spent transcribing, across every successful
+    /// utterance. Paired with `secondsTranscribed` it gives a throughput the
+    /// user can actually feel, rather than a number only a profiler likes.
+    public let latencyMS: Int
+    /// Seconds of audio those milliseconds covered.
+    public let secondsTranscribed: Double
+
+    /// How much faster than real time the machine transcribes. A 10-second
+    /// utterance handled in two seconds is 5x.
+    public var realtimeFactor: Double {
+        latencyMS > 0 ? secondsTranscribed / (Double(latencyMS) / 1000) : 0
+    }
+
+    /// Words produced per second of work. The nearest honest equivalent of
+    /// tokens per second for the speech stage, and directly comparable with the
+    /// polish model's rate once there is one.
+    public var wordsPerSecond: Double {
+        latencyMS > 0 ? Double(spokenWords) / (Double(latencyMS) / 1000) : 0
+    }
 }
 
 /// Local history. On macOS this is the whole persistence layer (standalone
@@ -127,22 +146,28 @@ public final class Store {
             let startOfDay = Calendar.current.startOfDay(for: Date()).timeIntervalSince1970
             let sql = """
             SELECT COUNT(*), COALESCE(SUM(spoken_words),0), COALESCE(SUM(duration_ms),0)/1000.0,
-                   COALESCE(SUM(CASE WHEN created_at >= ? THEN spoken_words ELSE 0 END),0)
+                   COALESCE(SUM(CASE WHEN created_at >= ? THEN spoken_words ELSE 0 END),0),
+                   COALESCE(SUM(CASE WHEN outcome='ok' THEN latency_ms ELSE 0 END),0),
+                   COALESCE(SUM(CASE WHEN outcome='ok' THEN duration_ms ELSE 0 END),0)/1000.0
             FROM utterances;
             """
             var st: OpaquePointer?
             guard sqlite3_prepare_v2(db, sql, -1, &st, nil) == SQLITE_OK else {
-                return Stats(utterances: 0, spokenWords: 0, secondsSpoken: 0, todayWords: 0)
+                return Stats(utterances: 0, spokenWords: 0, secondsSpoken: 0, todayWords: 0,
+                             latencyMS: 0, secondsTranscribed: 0)
             }
             defer { sqlite3_finalize(st) }
             sqlite3_bind_double(st, 1, startOfDay)
             guard sqlite3_step(st) == SQLITE_ROW else {
-                return Stats(utterances: 0, spokenWords: 0, secondsSpoken: 0, todayWords: 0)
+                return Stats(utterances: 0, spokenWords: 0, secondsSpoken: 0, todayWords: 0,
+                             latencyMS: 0, secondsTranscribed: 0)
             }
             return Stats(utterances: Int(sqlite3_column_int(st, 0)),
                          spokenWords: Int(sqlite3_column_int(st, 1)),
                          secondsSpoken: sqlite3_column_double(st, 2),
-                         todayWords: Int(sqlite3_column_int(st, 3)))
+                         todayWords: Int(sqlite3_column_int(st, 3)),
+                         latencyMS: Int(sqlite3_column_int64(st, 4)),
+                         secondsTranscribed: sqlite3_column_double(st, 5))
         }
     }
 

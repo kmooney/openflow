@@ -44,6 +44,8 @@ final class AppState: ObservableObject {
 
     let engine: DictationEngine
     let models: ModelStore
+    /// The polish model, chosen the same way the speech model is.
+    let polish: ModelStore
     private let store: Store
     private let handoff: Handoff?
     private let liveActivity = LiveActivityController()
@@ -61,9 +63,11 @@ final class AppState: ObservableObject {
     /// `Handoff.removeObserver` ignores anything that is not its own box.
     private var localObservers: [NSObjectProtocol] = []
 
-    init(engine: DictationEngine, store: Store, models: ModelStore, handoff: Handoff?) {
+    init(engine: DictationEngine, store: Store, models: ModelStore,
+         polish: ModelStore, handoff: Handoff?) {
         self.engine = engine
         self.models = models
+        self.polish = polish
         self.store = store
         self.handoff = handoff
         self.stats = store.stats()

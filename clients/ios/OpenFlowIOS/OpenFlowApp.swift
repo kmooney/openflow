@@ -14,6 +14,13 @@ struct OpenFlowApp: App {
         let store = (try? Store(path: support.appendingPathComponent("history.sqlite").path))
             ?? Store.inMemory()
         let models = ModelStore(directory: support.appendingPathComponent("models"))
+        // A second store over the same machinery: same downloads, same
+        // selection, same deletion. Its own defaults key, or choosing a polish
+        // model would silently change which speech model was selected.
+        let polish = ModelStore(directory: support.appendingPathComponent("polish"),
+                                defaultID: PolishCatalog.offID,
+                                catalog: PolishCatalog.all,
+                                defaultsKey: "selectedPolishModel")
         // Falls back to the bundled model if the selection has gone missing.
         let modelPath = models.activeURL?.path
             ?? Bundle.main.url(forResource: "ggml-base.en", withExtension: "bin")?.path
@@ -25,7 +32,7 @@ struct OpenFlowApp: App {
         models.onSelectionChanged = { [weak engine] url in engine?.useModel(at: url.path) }
 
         _state = StateObject(wrappedValue: AppState(
-            engine: engine, store: store, models: models,
+            engine: engine, store: store, models: models, polish: polish,
             handoff: Handoff(appGroup: OpenFlowIDs.appGroup)))
     }
 

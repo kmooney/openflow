@@ -1,7 +1,24 @@
 import Foundation
 
+/// Anything `ModelStore` can fetch and keep on disk.
+///
+/// Extracted so the same download, selection and deletion machinery serves the
+/// speech model and the polish model. They are the same problem -- a large file
+/// the user chooses, waits for, and may delete -- and were never going to stay
+/// one catalogue.
+public protocol DownloadableModel: Identifiable, Sendable {
+    var id: String { get }
+    var filename: String { get }
+    var displayName: String { get }
+    /// Approximate download size, for the UI to show before committing.
+    var bytes: Int64 { get }
+    /// Honest one-liner about the trade, not marketing.
+    var note: String { get }
+    var downloadURL: URL { get }
+}
+
 /// A Whisper model the user can run.
-public struct WhisperModel: Identifiable, Hashable, Sendable {
+public struct WhisperModel: Identifiable, Hashable, Sendable, DownloadableModel {
     public let id: String
     public let filename: String
     public let displayName: String

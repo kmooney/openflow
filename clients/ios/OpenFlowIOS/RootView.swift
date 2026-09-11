@@ -24,7 +24,7 @@ struct RootView: View {
             .navigationTitle("OpenFlow")
             .navigationBarTitleDisplayMode(.inline)
             .sheet(isPresented: $showingModels) {
-                ModelsView(models: state.models)
+                ModelsView(models: state.models, polish: state.polish)
             }
             .sheet(isPresented: $showingSetup) { KeyboardSetupView() }
             .toolbar {
@@ -69,14 +69,24 @@ struct RootView: View {
     }
 
     private var stats: some View {
-        HStack(alignment: .firstTextBaseline, spacing: 22) {
-            Stat(value: state.stats.spokenWords.formatted(), label: "words", prominent: true)
-            Stat(value: state.stats.todayWords.formatted(), label: "today")
-            Stat(value: state.stats.utterances.formatted(), label: "utterances")
-            Spacer()
+        ScrollView(.horizontal, showsIndicators: false) {
+            HStack(alignment: .firstTextBaseline, spacing: 22) {
+                Stat(value: state.stats.spokenWords.formatted(), label: "words", prominent: true)
+                Stat(value: state.stats.todayWords.formatted(), label: "today")
+                Stat(value: state.stats.utterances.formatted(), label: "utterances")
+                // How the machine is actually performing, not just how much it
+                // has done. Both are derived from work already recorded per
+                // utterance, so they cost nothing to show.
+                if state.stats.latencyMS > 0 {
+                    Stat(value: String(format: "%.1f×", state.stats.realtimeFactor),
+                         label: "realtime")
+                    Stat(value: String(format: "%.0f", state.stats.wordsPerSecond),
+                         label: "words/sec")
+                }
+            }
+            .padding(.horizontal, 18)
+            .padding(.vertical, 12)
         }
-        .padding(.horizontal, 18)
-        .padding(.vertical, 12)
     }
 
     private var recorder: some View {
