@@ -24,6 +24,8 @@ pub struct Config {
     pub lists: bool,
     /// Spoken corrections ("scratch that", "no no no") erase what preceded.
     pub corrections: bool,
+    /// Rebuild web and email addresses that were transcribed as words.
+    pub addresses: bool,
     /// How many consecutive enumerators before it counts as a list. Three is
     /// conservative: two ("One, X. Two, Y.") is a real construction but a much
     /// weaker signal, and a false positive mangles ordinary prose.
@@ -43,6 +45,7 @@ impl Default for Config {
             quote_commands: true,
             lists: true,
             corrections: true,
+            addresses: true,
             min_list_items: 3,
         }
     }
@@ -84,6 +87,13 @@ const LEGIT_DOUBLES: &[&str] = &["had", "that", "is", "no", "very", "really"];
 
 pub fn format(raw: &str, cfg: &Config) -> String {
     let mut s = raw.to_string();
+
+    // First, before anything can rewrite the words it keys on. The
+    // punctuation-command table would turn a spoken "dot" into "." and destroy
+    // the pattern this pass exists to recognise.
+    if cfg.addresses {
+        s = apply_addresses(&s);
+    }
 
     if cfg.quote_commands {
         s = apply_quotes(&s);
@@ -267,6 +277,10 @@ fn tidy(s: &str) -> String {
 fn capitalize_sentences(s: &str) -> String {
     let mut out = String::with_capacity(s.len());
     let mut at_start = true;
+    // A full stop only ends a sentence if a space follows it. Without that
+    // test, the dot in a rebuilt address is a sentence boundary and
+    // `https://kevin-mooney.com` comes back as `https://kevin-mooney.Com`.
+    let mut pending = false;
     for ch in s.chars() {
         // List markers sit between the line start and the first word; they must
         // not consume the sentence-start state. (The ordered case only worked
@@ -278,12 +292,20 @@ fn capitalize_sentences(s: &str) -> String {
         if at_start && ch.is_alphabetic() {
             out.extend(ch.to_uppercase());
             at_start = false;
+            pending = false;
         } else {
             out.push(ch);
-            if ch == '.' || ch == '?' || ch == '!' || ch == '\n' {
+            if ch == '\n' {
                 at_start = true;
-            } else if !ch.is_whitespace() {
+                pending = false;
+            } else if matches!(ch, '.' | '?' | '!') {
+                pending = true;
+            } else if ch.is_whitespace() {
+                at_start = pending || at_start;
+                pending = false;
+            } else {
                 at_start = false;
+                pending = false;
             }
         }
     }
@@ -496,6 +518,244 @@ fn canonicalize_numbers(toks: &[String]) -> Vec<String> {
         i += 1;
     }
     out
+}
+
+// ------------------------------------------------------------- addresses
+//
+// Whisper hears an address as the words someone said, which is a faithful
+// transcription and a useless one: "h-t-t-p-s colon slash slash kevin dash
+// mooney dot com" is exactly right about the sounds and exactly wrong about
+// the text.
+//
+// This is mechanical work and belongs in rules rather than in a model. The
+// mapping is fixed -- "dash" is always "-" -- so a rule reconstructs the
+// address every time, while a model would occasionally produce
+// `kevinmooney.com`: plausible, wrong, and unlike the phonetic version you
+// will not notice before pasting it. A wrong address is worse than an
+// obviously broken one.
+
+/// Words that join the parts of an address, and the character each becomes.
+fn connector(tok: &str) -> Option<&'static str> {
+    match tok {
+        "dot" => Some("."),
+        "dash" | "hyphen" => Some("-"),
+        "underscore" => Some("_"),
+        "slash" => Some("/"),
+        "colon" => Some(":"),
+        "at" => Some("@"),
+        _ => None,
+    }
+}
+
+/// Endings common enough in speech to be worth anchoring on. Deliberately
+/// short: every entry is a chance to mangle ordinary prose, and the cost of
+/// omitting one is that an address stays as the user said it.
+const TLDS: &[&str] = &[
+    "com", "org", "net", "io", "dev", "edu", "gov", "ai", "app", "uk", "co",
+];
+
+/// Words that end a sentence more often than they start an address. Without
+/// this, "the dot com boom" becomes "the.com".
+const NOT_ADDRESS_STARTS: &[&str] = &[
+    "the", "a", "an", "this", "that", "these", "those", "my", "your", "our",
+    "is", "was", "are", "were", "of", "in", "on", "at", "to", "and", "or",
+    "but", "it", "its", "first", "second", "third", "one", "two", "three",
+];
+
+/// "h-t-t-p-s" -> "https". Whisper spells out letters it hears named
+/// individually and joins them with hyphens, so the hyphens are an artefact of
+/// the spelling rather than part of the word.
+fn collapse_spelled(tok: &str) -> Option<String> {
+    let parts: Vec<&str> = tok.split('-').collect();
+    if parts.len() >= 3
+        && parts
+            .iter()
+            .all(|p| p.chars().count() == 1 && p.chars().all(|c| c.is_ascii_alphanumeric()))
+    {
+        Some(parts.concat())
+    } else {
+        None
+    }
+}
+
+/// A single spelled-out character. Whisper writes a named letter as its own
+/// token -- "k e v i n", not "k-e-v-i-n" -- so a run of these is one word that
+/// has been taken apart, and rejoining them is most of this pass's job.
+///
+/// It is also why the address must be rebuilt before anything else runs: the
+/// stutter collapse reads "m o o n e y" as a repetition and returns "m o n e
+/// y", and reads the "slash slash" of a scheme as one slash.
+fn single_letter(tok: &str) -> bool {
+    tok.chars().count() == 1 && tok.chars().all(|c| c.is_ascii_alphanumeric())
+}
+
+/// A token whisper already wrote as a domain: "mooney.com". It punctuates
+/// some addresses itself and spells others out, and the two arrive in the same
+/// sentence, so both have to be recognised.
+fn domain_like(tok: &str) -> bool {
+    match tok.rsplit_once('.') {
+        Some((host, tld)) => {
+            !host.is_empty()
+                && host
+                    .chars()
+                    .all(|c| c.is_ascii_alphanumeric() || c == '-' || c == '.')
+                && TLDS.contains(&tld)
+        }
+        None => false,
+    }
+}
+
+/// Could this token be part of an address?
+fn addressy(tok: &str) -> bool {
+    !tok.is_empty()
+        && connector(tok).is_none()
+        && (tok.chars().all(|c| c.is_ascii_alphanumeric())
+            || collapse_spelled(tok).is_some()
+            || domain_like(tok))
+}
+
+/// Schemes worth anchoring on. A scheme followed by "colon" is the one signal
+/// that survives every shape whisper produces -- it does not depend on how the
+/// host was spelled, or on whether the ending arrived as a word or already
+/// punctuated.
+const SCHEMES: &[&str] = &["http", "https", "ftp"];
+
+/// Join one span of address tokens, carrying across whatever punctuation ended
+/// the sentence the span sat in.
+fn build_address(span: &[String], last: &str) -> String {
+    let mut built = String::new();
+    for b in span {
+        match connector(b) {
+            Some(c) => built.push_str(c),
+            None => built.push_str(&collapse_spelled(b).unwrap_or_else(|| b.clone())),
+        }
+    }
+    // Exactly what `bare` trimmed off, and nothing else. Skipping characters
+    // by kind instead cost the sentence its full stop, because the dot in
+    // "mooney.com" looks identical to the one ending "…com."
+    let trimmed = last.trim_end_matches(|c: char| matches!(c, ',' | '.' | '!' | '?' | ';' | ':'));
+    built.push_str(&last[trimmed.len()..]);
+    built
+}
+
+/// Rebuild spoken web and email addresses.
+pub fn apply_addresses(s: &str) -> String {
+    let toks: Vec<&str> = s.split_whitespace().collect();
+    if toks.len() < 2 {
+        return s.to_string();
+    }
+    // Lower-cased and stripped of sentence punctuation, for matching only; the
+    // original tokens are what gets rebuilt around.
+    let bare: Vec<String> = toks
+        .iter()
+        .map(|t| {
+            t.trim_end_matches(|c: char| matches!(c, ',' | '.' | '!' | '?' | ';' | ':'))
+                .to_ascii_lowercase()
+        })
+        .collect();
+
+    let mut out: Vec<String> = Vec::with_capacity(toks.len());
+    let mut i = 0;
+    while i < toks.len() {
+        // A scheme followed by "colon" begins an address whatever comes next,
+        // so this walks forward from it rather than backward from the ending.
+        if SCHEMES.contains(&bare[i].as_str()) && i + 1 < bare.len() && bare[i + 1] == "colon" {
+            let mut end = i;
+            let mut j = i + 1;
+            while j < bare.len() {
+                if connector(&bare[j]).is_some() {
+                    end = j;
+                    j += 1;
+                    continue;
+                }
+                if !addressy(&bare[j]) {
+                    break;
+                }
+                // A run of single letters is one word taken apart.
+                let mut k = j;
+                while k + 1 < bare.len() && single_letter(&bare[k]) && single_letter(&bare[k + 1])
+                {
+                    k += 1;
+                }
+                end = k;
+                j = k + 1;
+                // Two plain words in a row end the address: the second belongs
+                // to the sentence.
+                if j >= bare.len() || connector(&bare[j]).is_none() {
+                    break;
+                }
+            }
+            if end > i {
+                out.push(build_address(&bare[i..=end], toks[end]));
+                i = end + 1;
+                continue;
+            }
+        }
+
+        // Otherwise anchor on "dot" plus a known ending and walk backward.
+        let anchored = i > 0 && bare[i - 1] == "dot" && TLDS.contains(&bare[i].as_str());
+        if !anchored {
+            out.push(toks[i].to_string());
+            i += 1;
+            continue;
+        }
+
+        // Walk left. An address alternates token, connector, token -- so a
+        // plain word is only part of it when a connector sits to its left, and
+        // "at" takes exactly one token with it because an address has one
+        // local part.
+        let mut start = i;
+        while start > 0 {
+            let p = start - 1;
+            match connector(&bare[p]) {
+                Some("@") => {
+                    if p == 0 || !addressy(&bare[p - 1]) {
+                        break;
+                    }
+                    start = p - 1;
+                    break;
+                }
+                Some(_) => start = p,
+                None => {
+                    if !addressy(&bare[p]) {
+                        break;
+                    }
+                    // The stop-word list guards against "the dot com boom", so
+                    // it only applies to whole words. A single letter inside a
+                    // spelled-out run is never the English word: "m a i l"
+                    // must not stop at its "a".
+                    if !single_letter(&bare[p])
+                        && NOT_ADDRESS_STARTS.contains(&bare[p].as_str())
+                    {
+                        break;
+                    }
+                    // A run of single letters is one word taken apart. Take the
+                    // whole run, or the walk stops at the first letter and
+                    // rebuilds "y.com" out of "mooney dot com".
+                    let mut q = p;
+                    while q > 0 && single_letter(&bare[q]) && single_letter(&bare[q - 1]) {
+                        q -= 1;
+                    }
+                    start = q;
+                    if q == 0 || connector(&bare[q - 1]).is_none() {
+                        break;
+                    }
+                }
+            }
+        }
+
+        // Nothing but "dot com" on its own is not an address.
+        if start >= i - 1 {
+            out.push(toks[i].to_string());
+            i += 1;
+            continue;
+        }
+
+        out.truncate(out.len() - (i - start));
+        out.push(build_address(&bare[start..=i], toks[i]));
+        i += 1;
+    }
+    out.join(" ")
 }
 
 // ------------------------------------------------------------- guardrail
@@ -1791,5 +2051,127 @@ pub fn apply_letter_layout(s: &str, tone: Tone) -> String {
     match sal {
         None => body,
         Some(sal) => format!("{}\n\n{}", sal, body),
+    }
+}
+
+#[cfg(test)]
+mod address_tests {
+    use super::*;
+
+    fn f(s: &str) -> String {
+        apply_addresses(s)
+    }
+
+    /// The case that started this: faithful to the sounds, useless as text.
+    #[test]
+    fn rebuilds_a_spoken_url() {
+        assert_eq!(
+            f("my site is h-t-t-p-s colon slash slash kevin dash mooney dot com"),
+            "my site is https://kevin-mooney.com"
+        );
+    }
+
+    #[test]
+    fn rebuilds_a_bare_domain() {
+        assert_eq!(f("go to kevin dash mooney dot com"), "go to kevin-mooney.com");
+    }
+
+    #[test]
+    fn rebuilds_an_email() {
+        assert_eq!(
+            f("reach me at kevin at gmail dot com"),
+            "reach me at kevin@gmail.com"
+        );
+    }
+
+    /// An address has one local part. The "at" that means "at" must survive.
+    #[test]
+    fn does_not_swallow_the_preposition() {
+        assert!(f("email me at kevin at gmail dot com").starts_with("email me at "));
+    }
+
+    /// The guard that earns its place: a real English phrase that looks exactly
+    /// like an address to a naive rule.
+    #[test]
+    fn leaves_the_dot_com_boom_alone() {
+        assert_eq!(f("the dot com boom was wild"), "the dot com boom was wild");
+    }
+
+    #[test]
+    fn leaves_ordinary_prose_alone() {
+        let s = "put a dot at the end and dash off a note";
+        assert_eq!(f(s), s);
+    }
+
+    /// Sentence punctuation belongs to the sentence, not the address.
+    #[test]
+    fn keeps_trailing_punctuation() {
+        assert_eq!(f("see kevin dash mooney dot com."), "see kevin-mooney.com.");
+    }
+
+    #[test]
+    fn collapses_spelled_letters() {
+        assert_eq!(collapse_spelled("h-t-t-p-s").as_deref(), Some("https"));
+        assert_eq!(collapse_spelled("e-mail"), None, "two parts is a hyphenated word");
+        assert_eq!(collapse_spelled("kevin"), None);
+    }
+
+    /// Already-correct text must pass through: whisper sometimes gets it right,
+    /// and a second pass must not make it worse.
+    #[test]
+    fn leaves_a_real_url_alone() {
+        let s = "see https://kevin-mooney.com for details";
+        assert_eq!(f(s), s);
+    }
+
+    #[test]
+    fn dot_com_alone_is_not_an_address() {
+        assert_eq!(f("dot com"), "dot com");
+    }
+}
+
+#[cfg(test)]
+mod address_shape_tests {
+    use super::*;
+
+    /// Whisper does not produce one shape, it produces several — these three
+    /// are all real output from the same spoken sentence on the same phone.
+    #[test]
+    fn handles_letters_spelled_out_as_separate_tokens() {
+        assert_eq!(
+            apply_addresses("http colon slash slash k e v i n dash m o o n e y dot com"),
+            "http://kevin-mooney.com"
+        );
+    }
+
+    #[test]
+    fn handles_a_host_whisper_already_punctuated() {
+        assert_eq!(
+            apply_addresses("https colon slash slash kevin dash mooney.com"),
+            "https://kevin-mooney.com"
+        );
+    }
+
+    #[test]
+    fn handles_the_fully_spoken_form() {
+        assert_eq!(
+            apply_addresses("h-t-t-p-s colon slash slash kevin dash mooney dot com"),
+            "https://kevin-mooney.com"
+        );
+    }
+
+    /// The address must end where the sentence resumes.
+    #[test]
+    fn stops_at_the_end_of_the_address() {
+        assert_eq!(
+            apply_addresses("go to https colon slash slash kevin dash mooney.com and tell me"),
+            "go to https://kevin-mooney.com and tell me"
+        );
+    }
+
+    /// A scheme said on its own is not an address and must not eat the sentence.
+    #[test]
+    fn a_bare_scheme_is_left_alone() {
+        assert_eq!(apply_addresses("https is a protocol"), "https is a protocol");
     }
 }

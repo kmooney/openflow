@@ -410,6 +410,15 @@ public final class DictationEngine {
             }
 
             let result = Formatter.format(raw, tone: tone)
+            #if DEBUG
+            // The pipeline, stage by stage. DEBUG only on purpose: this is the
+            // user's speech, and an app whose whole claim is that nothing
+            // leaves the device should not be writing transcripts into the
+            // system log on a shipping build.
+            NSLog("openflow: heard  |%@|", raw)
+            NSLog("openflow: format |%@|%@", result.formatted,
+                  result.ok ? "" : " (note: \(result.note))")
+            #endif
             let latencyMS = Int(Date().timeIntervalSince(t0) * 1000)
             NSLog("openflow: transcribed %d ms of audio in %d ms (gpu=%@, %d threads)",
                   audioMS, latencyMS, (self.transcriber?.usesGPU ?? false) ? "yes" : "no",

@@ -231,6 +231,17 @@ struct HistoryList: View {
 
                     if u.outcome == "ok" {
                         Text(u.finalText).font(.body)
+                        // What whisper actually heard, whenever the formatter
+                        // changed it. The pipeline is only trustworthy if you
+                        // can see what each stage did — and when a rebuilt
+                        // address comes out wrong, this is the line that says
+                        // whether the model or the rules got it wrong.
+                        if u.rawText != u.finalText, !u.rawText.isEmpty {
+                            Label(u.rawText, systemImage: "ear")
+                                .font(.caption2)
+                                .foregroundStyle(.secondary)
+                                .textSelection(.enabled)
+                        }
                     }
                     ForEach(Array(LedgerEntry.decode(u.ledger).enumerated()), id: \.offset) { _, e in
                         Text(e.description).font(.caption2).foregroundStyle(.secondary)

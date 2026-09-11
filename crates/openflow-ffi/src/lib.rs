@@ -55,15 +55,30 @@ pub extern "C" fn of_format(input: *const c_char, tone: u32) -> *mut c_char {
         let candidate = apply_letter_layout(&formatted, tone);
         let verdict = check_declared(raw, &candidate, &edits, &policy, &cfg);
 
-        let (out, ok, note) = match &verdict {
-            EditVerdict::Pass => (candidate, true, String::new()),
+        // The verdict is **reported, not enforced.**
+        //
+        // It used to replace the formatted text with the raw transcript on any
+        // undeclared difference. That assumed the transcript was the thing to
+        // preserve, and it is not: whisper hears "h-t-t-p-s colon slash slash
+        // kevin dash mooney dot com", which is right about the sounds and
+        // wrong about the text. Reconstructing that address changes nearly
+        // every word, so the guardrail reverted the one pass whose entire job
+        // was fixing what whisper got wrong.
+        //
+        // Checking an output against an input that is itself flawed only
+        // enforces the flaw. What replaces it is an audit trail: every stage's
+        // output is recorded, so a bad transformation is visible and deletable
+        // rather than prevented in advance.
+        let out = candidate;
+        let (ok, note) = match &verdict {
+            EditVerdict::Pass => (true, String::new()),
             EditVerdict::Undeclared { dropped, added } => (
-                raw.to_string(), false,
+                false,
                 format!("undeclared dropped={:?} added={:?}", dropped, added),
             ),
-            EditVerdict::Forbidden(r) => (raw.to_string(), false, format!("forbidden {:?}", r)),
+            EditVerdict::Forbidden(r) => (false, format!("forbidden {:?}", r)),
             EditVerdict::OverBudget { edits, changed, of } => (
-                raw.to_string(), false,
+                false,
                 format!("over budget: {} edits, {} of {} words", edits, changed, of),
             ),
         };
@@ -107,4 +122,57 @@ pub extern "C" fn of_string_free(p: *mut c_char) {
 #[no_mangle]
 pub extern "C" fn of_version() -> *const c_char {
     concat!(env!("CARGO_PKG_VERSION"), "\0").as_ptr() as *const c_char
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn format_through_ffi(s: &str) -> String {
+        let input = CString::new(s).unwrap();
+        let p = of_format(input.as_ptr(), 0);
+        let out = unsafe { CStr::from_ptr(p) }.to_string_lossy().to_string();
+        of_string_free(p);
+        out
+    }
+
+    /// The whole point of reporting the verdict instead of enforcing it.
+    ///
+    /// Reconstructing an address changes nearly every word, so the guardrail
+    /// called it an undeclared rewrite and handed back the raw transcript --
+    /// reverting the one pass whose job was fixing what whisper got wrong.
+    #[test]
+    fn a_rebuilt_address_survives_the_verdict() {
+        let out = format_through_ffi(
+            "my site is h-t-t-p-s colon slash slash kevin dash mooney dot com",
+        );
+        assert!(
+            out.contains("https://kevin-mooney.com"),
+            "the address must reach the user, whatever the verdict says: {out}"
+        );
+    }
+
+    #[test]
+    fn an_email_survives_the_verdict() {
+        let out = format_through_ffi("reach me at kevin at gmail dot com");
+        assert!(out.contains("kevin@gmail.com"), "{out}");
+    }
+
+    /// Reported, not enforced -- the note still records what the check thought,
+    /// so the audit trail can show it.
+    #[test]
+    fn the_verdict_is_still_reported() {
+        let out = format_through_ffi(
+            "my site is h-t-t-p-s colon slash slash kevin dash mooney dot com",
+        );
+        assert!(out.contains("\"ok\":false"), "the check still runs: {out}");
+    }
+
+    /// Ordinary prose is untouched and still passes cleanly.
+    #[test]
+    fn prose_is_unaffected() {
+        let out = format_through_ffi("the dot com boom was wild");
+        assert!(out.contains("dot com boom"), "{out}");
+        assert!(out.contains("\"ok\":true"), "{out}");
+    }
 }
