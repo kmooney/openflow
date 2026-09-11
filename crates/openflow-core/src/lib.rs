@@ -1,6 +1,11 @@
 //! M0 spike: the tier-1 deterministic formatter, `normalize()`, and the
 //! round-trip guardrail. Throwaway code whose findings feed `openflow-core`.
 
+
+/// Prompt construction and reply cleanup for the polish stage. Shared so
+/// macOS, iOS and Windows ask the model the same question.
+pub mod polish;
+
 // ---------------------------------------------------------------- config
 
 #[derive(Clone, Debug)]

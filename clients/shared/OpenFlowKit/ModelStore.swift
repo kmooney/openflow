@@ -102,6 +102,17 @@ public final class ModelStore: ObservableObject {
 
     public var activeURL: URL? { location(of: selectedID) }
 
+    /// Choose no model at all.
+    ///
+    /// `select` refuses an id it cannot find a file for, which is right for a
+    /// model and wrong for the deliberate absence of one — so tapping "None"
+    /// silently did nothing, exactly like every other selection did before the
+    /// catalogue lookup was fixed.
+    public func selectNone() {
+        selectedID = ""
+        UserDefaults.standard.set("", forKey: defaultsKey)
+    }
+
     public func select(_ id: String) {
         guard let url = location(of: id) else { return }
         selectedID = id
@@ -112,7 +123,11 @@ public final class ModelStore: ObservableObject {
     // MARK: - download
 
     public func download(_ model: any DownloadableModel) {
-        guard tasks[model.id] == nil, location(of: model.id) == nil else { return }
+        guard tasks[model.id] == nil, location(of: model.id) == nil else {
+            NSLog("openflow: download(%@) ignored — already running or present", model.id)
+            return
+        }
+        NSLog("openflow: downloading %@ from %@", model.id, model.downloadURL.absoluteString)
         lastError = nil
         let destination = directory.appendingPathComponent(model.filename)
 
@@ -135,10 +150,16 @@ public final class ModelStore: ObservableObject {
                     self.delegates[model.id] = nil
                     self.downloading[model.id] = nil
                     if let error {
+                        NSLog("openflow: download %@ failed: %@", model.id,
+                              error.localizedDescription)
                         self.lastError = error.localizedDescription
                         return
                     }
-                    guard let tempURL else { return }
+                    guard let tempURL else {
+                        NSLog("openflow: download %@ finished with no file", model.id)
+                        self.lastError = "Download produced no file."
+                        return
+                    }
                     do {
                         try? FileManager.default.removeItem(at: destination)
                         try FileManager.default.moveItem(at: tempURL, to: destination)
@@ -149,9 +170,12 @@ public final class ModelStore: ObservableObject {
                         let size = (attrs?[.size] as? Int64) ?? 0
                         guard size > model.bytes / 2 else {
                             try? FileManager.default.removeItem(at: destination)
+                            NSLog("openflow: download %@ truncated: %lld of %lld",
+                                  model.id, size, model.bytes)
                             self.lastError = "Download was incomplete. Try again."
                             return
                         }
+                        NSLog("openflow: installed %@ (%lld bytes)", model.id, size)
                         self.refresh()
                         self.select(model.id)
                     } catch {

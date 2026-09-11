@@ -124,6 +124,65 @@ pub extern "C" fn of_version() -> *const c_char {
     concat!(env!("CARGO_PKG_VERSION"), "\0").as_ptr() as *const c_char
 }
 
+/// Build the polish prompt for one utterance.
+///
+/// `vocabulary` is a newline-separated list; empty means none. Returns owned
+/// UTF-8 that the caller frees with `of_string_free`.
+///
+/// Here rather than in each client so that macOS, iOS and Windows ask the model
+/// the same question. The inference itself is per-platform — the same split
+/// whisper already has — but the prompt is exactly the part that must not drift.
+#[no_mangle]
+pub extern "C" fn of_polish_prompt(
+    transcript: *const c_char,
+    vocabulary: *const c_char,
+) -> *mut c_char {
+    let empty = || CString::new("").unwrap().into_raw();
+    if transcript.is_null() {
+        return empty();
+    }
+    let text = match unsafe { CStr::from_ptr(transcript) }.to_str() {
+        Ok(s) => s,
+        Err(_) => return empty(),
+    };
+    let vocab: Vec<String> = if vocabulary.is_null() {
+        Vec::new()
+    } else {
+        unsafe { CStr::from_ptr(vocabulary) }
+            .to_str()
+            .unwrap_or("")
+            .lines()
+            .map(|l| l.trim())
+            .filter(|l| !l.is_empty())
+            .map(|l| l.to_string())
+            .collect()
+    };
+    CString::new(openflow_core::polish::prompt(text, &vocab))
+        .unwrap_or_else(|_| CString::new("").unwrap())
+        .into_raw()
+}
+
+/// Salvage usable text from a model's reply, falling back to the transcript.
+#[no_mangle]
+pub extern "C" fn of_polish_clean(
+    reply: *const c_char,
+    transcript: *const c_char,
+) -> *mut c_char {
+    let empty = || CString::new("").unwrap().into_raw();
+    if reply.is_null() || transcript.is_null() {
+        return empty();
+    }
+    let (r, t) = unsafe {
+        (
+            CStr::from_ptr(reply).to_str().unwrap_or(""),
+            CStr::from_ptr(transcript).to_str().unwrap_or(""),
+        )
+    };
+    CString::new(openflow_core::polish::clean(r, t))
+        .unwrap_or_else(|_| CString::new("").unwrap())
+        .into_raw()
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

@@ -31,6 +31,10 @@ clients/Frameworks/
 # at a pinned revision, so it does not belong in this history. Safe to delete
 # and re-run that script.
 /m0/whisper.cpp/
+# llama.cpp, same deal: a third-party checkout with its own .git, cloned by
+# the build. Without this it lands in the index as a bare gitlink and clones
+# of this repo get an empty directory they cannot populate.
+/m0/llama.cpp/
 
 # -------------------------------------------------------------- model weights
 # Hundreds of MB each and freely re-downloadable. Never commit these.

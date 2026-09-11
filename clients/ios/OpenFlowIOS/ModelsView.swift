@@ -1,6 +1,13 @@
 import SwiftUI
 import OpenFlowKit
 
+/// Both model pickers, over one row implementation.
+///
+/// The polish section had its own copy of the row for a while and it drifted
+/// immediately — a different button, a different label, a different tap target.
+/// There was never a reason for them to differ: downloading, selecting and
+/// deleting a large file is the same job whichever catalogue it came from, and
+/// a second copy is only a second place for a bug to hide.
 struct ModelsView: View {
     @ObservedObject var models: ModelStore
     @ObservedObject var polish: ModelStore
@@ -11,7 +18,7 @@ struct ModelsView: View {
             List {
                 Section {
                     ForEach(ModelCatalog.all) { model in
-                        row(model)
+                        row(model, in: models)
                     }
                 } header: {
                     Text("Speech")
@@ -20,44 +27,30 @@ struct ModelsView: View {
                 }
 
                 Section {
-                    // "None" is a real choice, not an absence. Formatting is
-                    // optional in a way transcription is not: without a model
-                    // the deterministic rules still run and still produce text.
-                    Button {
-                        polish.select(PolishCatalog.offID)
-                    } label: {
-                        HStack {
-                            Image(systemName: polish.selectedID == PolishCatalog.offID
-                                  ? "checkmark.circle.fill" : "circle")
-                                .foregroundStyle(polish.selectedID == PolishCatalog.offID
-                                                 ? Color.accentColor : Color.secondary)
-                            VStack(alignment: .leading, spacing: 2) {
-                                Text("None").font(.body)
-                                Text("Rules only. Fast, predictable, and cannot invent a word you did not say.")
-                                    .font(.caption).foregroundStyle(.secondary)
-                            }
-                        }
-                    }
-                    .buttonStyle(.plain)
-
+                    offRow
                     ForEach(PolishCatalog.all) { model in
-                        polishRow(model)
+                        row(model, in: polish,
+                            badge: model.rebuildsAddresses ? "rebuilds addresses" : nil)
                     }
                 } header: {
                     Text("Polish")
                 } footer: {
-                    Text("A language model that tidies the transcript before formatting. Every note is what was measured on real dictation from a phone — not what the model card claims. Only the largest rebuilt spoken web and email addresses correctly.")
+                    Text("A language model that tidies the transcript before formatting. Every note is what was measured on real dictation — not what the model card claims. Only the largest rebuilt spoken web and email addresses correctly.")
                 }
 
-                if models.diskUsage() > 0 {
+                let used = models.diskUsage() + polish.diskUsage()
+                if used > 0 {
                     Section {
                         LabeledContent("Downloaded models",
                                        value: ByteCountFormatter.string(
-                                        fromByteCount: models.diskUsage(), countStyle: .file))
+                                        fromByteCount: used, countStyle: .file))
                     }
                 }
 
-                if let error = models.lastError {
+                // Both stores. Only the speech store's errors were shown, so a
+                // failed polish download reported nothing at all — which looks
+                // exactly like a button that does not work.
+                ForEach([models.lastError, polish.lastError].compactMap { $0 }, id: \.self) { error in
                     Section {
                         Label(error, systemImage: "exclamationmark.triangle")
                             .foregroundStyle(.orange)
@@ -74,54 +67,32 @@ struct ModelsView: View {
         }
     }
 
-    /// The polish catalogue's own row. Same mechanics as the speech rows, plus
-    /// the one capability that actually splits the list — a model that cannot
-    /// rebuild an address does not half-do it, it invents a plausible wrong
-    /// answer, and that is worth saying on the row rather than in a footnote.
-    @ViewBuilder
-    private func polishRow(_ model: PolishModel) -> some View {
-        let isInstalled = polish.installed.contains(model.id)
-        let isSelected = polish.selectedID == model.id
-        let progress = polish.downloading[model.id]
-
-        VStack(alignment: .leading, spacing: 6) {
-            HStack {
-                Image(systemName: isSelected ? "checkmark.circle.fill" : "circle")
-                    .foregroundStyle(isSelected ? Color.accentColor : Color.secondary)
-                VStack(alignment: .leading, spacing: 2) {
-                    HStack(spacing: 6) {
-                        Text(model.displayName).font(.body)
-                        if model.rebuildsAddresses {
-                            Text("rebuilds addresses")
-                                .font(.caption2)
-                                .padding(.horizontal, 5).padding(.vertical, 1)
-                                .background(.green.opacity(0.2), in: Capsule())
-                        }
-                    }
-                    Text(model.sizeDescription).font(.caption).foregroundStyle(.secondary)
-                }
-                Spacer()
-                if let progress {
-                    ProgressView(value: progress.fraction).frame(width: 60)
-                } else if isInstalled {
-                    Button("Delete", role: .destructive) { polish.delete(model.id) }
-                        .font(.caption)
-                } else {
-                    Button("Download") { polish.download(model) }
-                        .font(.caption)
-                }
+    /// "None" is a real choice, not an absence: without a model the
+    /// deterministic rules still run and still produce text.
+    private var offRow: some View {
+        let isSelected = polish.selectedID == PolishCatalog.offID
+        return HStack {
+            Image(systemName: isSelected ? "checkmark.circle.fill" : "circle")
+                .foregroundStyle(isSelected ? Color.accentColor : Color.secondary)
+            VStack(alignment: .leading, spacing: 2) {
+                Text("None").font(.body)
+                Text("Rules only. Fast, predictable, and cannot invent a word you did not say.")
+                    .font(.caption).foregroundStyle(.secondary)
+                    .fixedSize(horizontal: false, vertical: true)
             }
-            Text(model.note).font(.caption).foregroundStyle(.secondary)
+            Spacer()
         }
         .contentShape(Rectangle())
-        .onTapGesture { if isInstalled { polish.select(model.id) } }
+        .onTapGesture { polish.selectNone() }
     }
 
     @ViewBuilder
-    private func row(_ model: WhisperModel) -> some View {
-        let isInstalled = models.installed.contains(model.id)
-        let isSelected = models.selectedID == model.id
-        let progress = models.downloading[model.id]
+    private func row(_ model: any DownloadableModel, in store: ModelStore,
+                     badge: String? = nil) -> some View {
+        let isInstalled = store.installed.contains(model.id)
+        let isSelected = store.selectedID == model.id
+        let progress = store.downloading[model.id]
+        let label = store.isBundled(model.id) ? "included" : badge
 
         VStack(alignment: .leading, spacing: 6) {
             HStack {
@@ -130,18 +101,18 @@ struct ModelsView: View {
                 VStack(alignment: .leading, spacing: 2) {
                     HStack(spacing: 6) {
                         Text(model.displayName).font(.body)
-                        if models.isBundled(model.id) {
-                            Text("included")
+                        if let label {
+                            Text(label)
                                 .font(.caption2)
                                 .padding(.horizontal, 5).padding(.vertical, 1)
                                 .background(.quaternary, in: Capsule())
                         }
                     }
-                    Text(model.sizeDescription)
+                    Text(ByteCountFormatter.string(fromByteCount: model.bytes, countStyle: .file))
                         .font(.caption).foregroundStyle(.secondary)
                 }
                 Spacer()
-                action(model, isInstalled: isInstalled, progress: progress)
+                action(model, in: store, isInstalled: isInstalled, progress: progress)
             }
 
             Text(model.note)
@@ -156,10 +127,10 @@ struct ModelsView: View {
             }
         }
         .contentShape(Rectangle())
-        .onTapGesture { if isInstalled { models.select(model.id) } }
+        .onTapGesture { if isInstalled { store.select(model.id) } }
         .swipeActions(edge: .trailing) {
-            if isInstalled && !models.isBundled(model.id) {
-                Button(role: .destructive) { models.delete(model.id) } label: {
+            if isInstalled && !store.isBundled(model.id) {
+                Button(role: .destructive) { store.delete(model.id) } label: {
                     Label("Delete", systemImage: "trash")
                 }
             }
@@ -167,14 +138,14 @@ struct ModelsView: View {
     }
 
     @ViewBuilder
-    private func action(_ model: WhisperModel, isInstalled: Bool,
-                        progress: ModelStore.Progress?) -> some View {
+    private func action(_ model: any DownloadableModel, in store: ModelStore,
+                        isInstalled: Bool, progress: ModelStore.Progress?) -> some View {
         if progress != nil {
-            Button("Cancel") { models.cancelDownload(model.id) }
+            Button("Cancel") { store.cancelDownload(model.id) }
                 .buttonStyle(.bordered).controlSize(.small)
         } else if !isInstalled {
             Button {
-                models.download(model)
+                store.download(model)
             } label: {
                 Label("Get", systemImage: "arrow.down.circle")
             }
