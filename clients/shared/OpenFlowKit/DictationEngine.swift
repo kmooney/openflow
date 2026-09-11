@@ -466,6 +466,10 @@ public final class DictationEngine {
                 NSLog("openflow: lifted quiet capture by %.1f dB before transcription", gainDB)
             }
 
+            // The model lays out paragraphs when there is one; pauses only
+            // when there is not. Two mechanisms breaking the same text fight,
+            // and the worse one wins because it runs first.
+            transcriber.insertParagraphBreaks = polishModelPath.isEmpty
             var raw = transcriber.transcribe(samples: levelled, vocabulary: vocab)
 
             // A failed whisper run and a silent one both come back as "".

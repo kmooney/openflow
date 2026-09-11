@@ -42,6 +42,15 @@ public final class Transcriber {
     /// Whether the last utterance's token times were internally consistent.
     /// False means whisper's timing collapsed and no break was trusted.
     public private(set) var lastTimingWasSound = true
+
+    /// Whether to act on the pauses at all.
+    ///
+    /// Off when a polish model is doing the layout. Two mechanisms breaking the
+    /// same text fight, and the worse one wins because it runs first: the model
+    /// produced "Hi, Cynthia" and a clean body while this was inserting a
+    /// paragraph around a stray full stop. Pauses are the fallback for when
+    /// there is no model, not a second opinion.
+    public var insertParagraphBreaks = true
     /// First and last word time of each segment, in ms.
     public private(set) var lastSegmentSpans: [(Int64, Int64)] = []
 
@@ -135,7 +144,23 @@ public final class Transcriber {
                             guard d.id < whisper_token_eot(ctx),
                                   let raw = whisper_full_get_token_text(ctx, i, k)
                             else { continue }
-                            words.append((String(cString: raw), d.t0 * 10, d.t1 * 10))
+                            let text = String(cString: raw)
+
+                            // Punctuation is its own token with its own
+                            // timestamp, and the gaps around it are an artefact
+                            // of tokenisation rather than anything the speaker
+                            // did. Left alone it produced a paragraph
+                            // containing nothing but a full stop, between two
+                            // "pauses" of 1100ms and 900ms.
+                            let isPunctuation = !text.trimmingCharacters(in: .whitespaces).isEmpty
+                                && text.allSatisfy { $0.isPunctuation || $0.isWhitespace }
+                            if isPunctuation, var last = words.popLast() {
+                                last.text += text
+                                last.end = max(last.end, d.t1 * 10)
+                                words.append(last)
+                                continue
+                            }
+                            words.append((text, d.t0 * 10, d.t1 * 10))
                         }
                     }
 
@@ -168,7 +193,7 @@ public final class Transcriber {
 
                     var breaks: [Double] = []
                     for (i, word) in words.enumerated() {
-                        if timingIsSound, i > 0, gaps[i - 1] >= threshold {
+                        if insertParagraphBreaks, timingIsSound, i > 0, gaps[i - 1] >= threshold {
                             // Trim the space whisper puts before a token, or
                             // every paragraph starts with one.
                             result = result.trimmingCharacters(in: .whitespaces)
