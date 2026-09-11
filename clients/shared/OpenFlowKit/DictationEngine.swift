@@ -63,12 +63,28 @@ public final class DictationEngine {
         didSet {
             guard polishModelPath != oldValue else { return }
             NSLog("openflow: polish model set to |%@|", polishModelPath)
-            work.async { [self] in
-                #if canImport(CLlamaShim)
-                polisher = nil
-                #endif
-            }
+            warmUpPolish()
         }
+    }
+
+    /// Load the polish model now rather than during the first utterance.
+    ///
+    /// Measured at ~18 seconds for a 270 MB model on a phone, and it was being
+    /// paid in the middle of someone's dictation — by far the most visible
+    /// flaw in the feature. Whisper has had `warmUp` for exactly this reason
+    /// since before any of this existed.
+    public func warmUpPolish() {
+        #if canImport(CLlamaShim)
+        work.async { [self] in
+            polisher = nil                      // free the old weights first
+            guard !polishModelPath.isEmpty else { return }
+            let started = Date()
+            polisher = Polisher(modelPath: polishModelPath, useGPU: preferGPU)
+            NSLog("openflow: polish model %@ in %.1fs (gpu=%@)",
+                  polisher == nil ? "FAILED to load" : "ready",
+                  Date().timeIntervalSince(started), preferGPU ? "yes" : "no")
+        }
+        #endif
     }
     /// Tokens per second from the last polish run, or 0 if none. Measured, and
     /// published because the whole reason the model is a choice is that this
@@ -168,6 +184,12 @@ public final class DictationEngine {
     public func prepare(forGPU gpu: Bool) {
         guard preferGPU != gpu || transcriber?.requestedGPU != gpu else { return }
         preferGPU = gpu
+        // The polish model has the same problem for the same reason: loaded
+        // with its layers on the GPU, it cannot run once the app is
+        // backgrounded, which is where the keyboard always runs it.
+        #if canImport(CLlamaShim)
+        if polisher?.usesGPU != gpu { warmUpPolish() }
+        #endif
         guard !modelPath.isEmpty else { return }
         work.async { [self] in
             guard transcriber?.requestedGPU != gpu else { return }
@@ -269,10 +291,12 @@ public final class DictationEngine {
     private func polished(_ raw: String, vocabulary: [String]) -> String {
         #if canImport(CLlamaShim)
         guard !polishModelPath.isEmpty else { return raw }
-        if polisher == nil {
-            NSLog("openflow: loading the polish model (gpu=%@)", preferGPU ? "yes" : "no")
+        // Normally already warm. This is the fallback for the case where the
+        // warm-up has not finished, or was never started.
+        if polisher == nil || polisher?.usesGPU != preferGPU {
+            NSLog("openflow: loading the polish model mid-utterance (gpu=%@)",
+                  preferGPU ? "yes" : "no")
             polisher = Polisher(modelPath: polishModelPath, useGPU: preferGPU)
-            NSLog("openflow: polish model %@", polisher == nil ? "FAILED to load" : "loaded")
             if polisher == nil {
                 NSLog("openflow: could not load the polish model at %@", polishModelPath)
                 return raw
