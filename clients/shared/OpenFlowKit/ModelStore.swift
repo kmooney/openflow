@@ -68,20 +68,36 @@ public final class ModelStore: ObservableObject {
     }
 
     /// Where a model lives: bundled inside the app, or downloaded.
+    /// This store's own catalogue, never the speech one.
+    ///
+    /// These two looked up `ModelCatalog` by name, which was invisible while
+    /// there was only one catalogue and broke everything the moment there were
+    /// two: a polish id is not in the speech catalogue, so `location` returned
+    /// nil, `refresh` never marked anything installed, `select` refused
+    /// silently, and a finished download promptly deselected itself. Three
+    /// symptoms, one cause.
+    private func entry(_ id: String) -> (any DownloadableModel)? {
+        catalog.first { $0.id == id }
+    }
+
     public func location(of id: String) -> URL? {
-        guard let model = ModelCatalog.model(id: id) else { return nil }
-        let name = (model.filename as NSString).deletingPathExtension
-        if let bundled = bundle.url(forResource: name, withExtension: "bin") {
-            return bundled
-        }
+        guard let model = entry(id) else { return nil }
+        if let bundled = bundledURL(for: model) { return bundled }
         let downloaded = directory.appendingPathComponent(model.filename)
         return FileManager.default.fileExists(atPath: downloaded.path) ? downloaded : nil
     }
 
-    public func isBundled(_ id: String) -> Bool {
-        guard let model = ModelCatalog.model(id: id) else { return false }
+    /// Extension taken from the filename rather than assumed: speech models are
+    /// `.bin` and polish models are `.gguf`.
+    private func bundledURL(for model: any DownloadableModel) -> URL? {
         let name = (model.filename as NSString).deletingPathExtension
-        return bundle.url(forResource: name, withExtension: "bin") != nil
+        let ext = (model.filename as NSString).pathExtension
+        return bundle.url(forResource: name, withExtension: ext)
+    }
+
+    public func isBundled(_ id: String) -> Bool {
+        guard let model = entry(id) else { return false }
+        return bundledURL(for: model) != nil
     }
 
     public var activeURL: URL? { location(of: selectedID) }
@@ -161,15 +177,18 @@ public final class ModelStore: ObservableObject {
 
     /// Remove a downloaded model. Bundled ones cannot be removed.
     public func delete(_ id: String) {
-        guard !isBundled(id), let model = ModelCatalog.model(id: id) else { return }
+        guard !isBundled(id), let model = entry(id) else { return }
         try? FileManager.default.removeItem(at: directory.appendingPathComponent(model.filename))
         refresh()
         guard selectedID == id else { return }
         // Fall back deliberately rather than via `select`, which refuses a
         // model that is not present -- that guard made the fallback a no-op and
         // left the selection pointing at the file just deleted.
-        if let next = installed.contains(ModelCatalog.bundledID)
-            ? ModelCatalog.bundledID : bestInstalled() {
+        // Prefer a bundled model if this catalogue has one. The polish
+        // catalogue does not, and naming the speech catalogue's bundled id here
+        // would have had a polish store fall back to a Whisper model.
+        let bundledFallback = catalog.first { isBundled($0.id) }?.id
+        if let next = bundledFallback ?? bestInstalled() {
             select(next)
         } else {
             selectedID = ""          // nothing usable; activeURL is nil
