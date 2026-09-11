@@ -13,7 +13,9 @@ const char *of_version(void);
 
 /// Build the polish prompt. `vocabulary` is newline-separated and may be NULL.
 /// Returns owned UTF-8; free with of_string_free. Never null.
-char *of_polish_prompt(const char *transcript, const char *vocabulary);
+/// `simple` non-zero asks for the narrower two-job instructions, for models
+/// too small to follow the full repair.
+char *of_polish_prompt(const char *transcript, const char *vocabulary, unsigned int simple);
 
 /// Salvage usable text from a model reply, falling back to the transcript when
 /// the reply is empty, a refusal, or obviously not a repair.

@@ -257,22 +257,28 @@ struct HistoryList: View {
                         } else {
                             Label("nothing captured", systemImage: "waveform.slash")
                         }
-                        // Which models produced this one. Worth showing beside
-                        // the word count rather than in a detail view: the
-                        // whole reason both are user-choosable is to compare
-                        // them, and a comparison you have to tap through is one
-                        // nobody makes.
-                        if let speech = modelName(u.speechModel) {
-                            Text(speech)
-                        }
-                        if let polish = modelName(u.polishModel) {
-                            Label(polish, systemImage: "wand.and.sparkles")
-                                .labelStyle(.titleAndIcon)
-                        }
                         Spacer()
                     }
                     .font(.caption2)
                     .foregroundStyle(.secondary)
+
+                    // Their own line. Sharing the header row with the date,
+                    // tone and word count left every cell too narrow and the
+                    // text wrapped inside them.
+                    if modelName(u.speechModel) != nil || modelName(u.polishModel) != nil {
+                        HStack(spacing: 8) {
+                            if let speech = modelName(u.speechModel) {
+                                Label(speech, systemImage: "waveform")
+                            }
+                            if let polish = modelName(u.polishModel) {
+                                Label(polish, systemImage: "wand.and.sparkles")
+                            }
+                            Spacer()
+                        }
+                        .font(.caption2)
+                        .foregroundStyle(.tertiary)
+                        .lineLimit(1)
+                    }
 
                     if u.outcome == "ok" {
                         Text(u.finalText).font(.body)

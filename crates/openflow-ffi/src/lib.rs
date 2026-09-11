@@ -136,6 +136,7 @@ pub extern "C" fn of_version() -> *const c_char {
 pub extern "C" fn of_polish_prompt(
     transcript: *const c_char,
     vocabulary: *const c_char,
+    simple: u32,
 ) -> *mut c_char {
     let empty = || CString::new("").unwrap().into_raw();
     if transcript.is_null() {
@@ -157,7 +158,12 @@ pub extern "C" fn of_polish_prompt(
             .map(|l| l.to_string())
             .collect()
     };
-    CString::new(openflow_core::polish::prompt(text, &vocab))
+    let style = if simple != 0 {
+        openflow_core::polish::Style::Tidy
+    } else {
+        openflow_core::polish::Style::Repair
+    };
+    CString::new(openflow_core::polish::prompt(text, &vocab, style))
         .unwrap_or_else(|_| CString::new("").unwrap())
         .into_raw()
 }

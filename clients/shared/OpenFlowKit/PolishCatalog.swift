@@ -20,6 +20,12 @@ public struct PolishModel: Identifiable, Hashable, Sendable, DownloadableModel {
     /// invents a plausible wrong answer.
     public let rebuildsAddresses: Bool
 
+    /// Ask this model for the narrower two-job prompt rather than the full
+    /// repair. Set where a model was measured repeating the instructions back
+    /// instead of following them: asking less is the only lever that does not
+    /// involve a bigger download.
+    public let needsSimplePrompt: Bool
+
     public var sizeDescription: String {
         ByteCountFormatter.string(fromByteCount: bytes, countStyle: .file)
     }
@@ -46,9 +52,9 @@ public enum PolishCatalog {
             filename: "SmolLM2-360M-Instruct-Q4_K_M.gguf",
             displayName: "SmolLM2 360M",
             bytes: 270_590_880,
-            note: "Too small for this job: it repeats the instructions back instead of following them, measured both on a phone and on a desktop. Listed because it downloads in seconds and proves the pipeline runs.",
+            note: "Too small for the full repair — it repeated the instructions back instead of following them. Given a narrower job (addresses and paragraph breaks only) it is worth a try; downloads in seconds.",
             downloadURL: URL(string: "https://huggingface.co/bartowski/SmolLM2-360M-Instruct-GGUF/resolve/main/SmolLM2-360M-Instruct-Q4_K_M.gguf")!,
-            rebuildsAddresses: false),
+            rebuildsAddresses: false, needsSimplePrompt: true),
         PolishModel(
             id: "qwen3-0.6b",
             filename: "Qwen3-0.6B-Q8_0.gguf",
@@ -56,7 +62,7 @@ public enum PolishCatalog {
             bytes: 639_446_688,
             note: "Strips filler but leaves punctuation and capitalisation alone. Dropped the scheme from a web address, giving “kevin-mooney.com” for “https://kevin-mooney.com”.",
             downloadURL: URL(string: "https://huggingface.co/Qwen/Qwen3-0.6B-GGUF/resolve/main/Qwen3-0.6B-Q8_0.gguf")!,
-            rebuildsAddresses: false),
+            rebuildsAddresses: false, needsSimplePrompt: false),
         PolishModel(
             id: "llama3.2-1b",
             filename: "Llama-3.2-1B-Instruct-Q4_K_M.gguf",
@@ -64,7 +70,7 @@ public enum PolishCatalog {
             bytes: 807_694_464,
             note: "Good at prose: turns a rambling sentence into a punctuated one and removes the “uh”s. Cannot rebuild addresses — it leaves spelled-out letters as they were.",
             downloadURL: URL(string: "https://huggingface.co/bartowski/Llama-3.2-1B-Instruct-GGUF/resolve/main/Llama-3.2-1B-Instruct-Q4_K_M.gguf")!,
-            rebuildsAddresses: false),
+            rebuildsAddresses: false, needsSimplePrompt: false),
         PolishModel(
             id: "qwen2.5-1.5b",
             filename: "Qwen2.5-1.5B-Instruct-Q4_K_M.gguf",
@@ -72,7 +78,7 @@ public enum PolishCatalog {
             bytes: 986_048_768,
             note: "Good prose, but it rewrote a web address into a different name that reads perfectly — the worst kind of wrong. Prefer 1B for prose, or 3B if addresses matter.",
             downloadURL: URL(string: "https://huggingface.co/bartowski/Qwen2.5-1.5B-Instruct-GGUF/resolve/main/Qwen2.5-1.5B-Instruct-Q4_K_M.gguf")!,
-            rebuildsAddresses: false),
+            rebuildsAddresses: false, needsSimplePrompt: false),
         PolishModel(
             id: "qwen2.5-3b",
             filename: "Qwen2.5-3B-Instruct-Q4_K_M.gguf",
@@ -80,7 +86,7 @@ public enum PolishCatalog {
             bytes: 1_929_903_264,
             note: "The smallest that rebuilt every spoken address correctly, including email. Costs roughly 2 GB of memory alongside the speech model — the most capable choice, and the one most likely to be evicted on a phone.",
             downloadURL: URL(string: "https://huggingface.co/bartowski/Qwen2.5-3B-Instruct-GGUF/resolve/main/Qwen2.5-3B-Instruct-Q4_K_M.gguf")!,
-            rebuildsAddresses: true),
+            rebuildsAddresses: true, needsSimplePrompt: false),
     ]
 
     public static func model(id: String) -> PolishModel? {

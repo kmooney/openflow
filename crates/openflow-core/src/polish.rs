@@ -32,6 +32,28 @@ Rewrite it as the text the speaker meant.
 - Rebuild web and email addresses. If one matches a known term, use that term exactly.
 - Reply with the corrected text only. No preamble, no explanation, no quotes.";
 
+/// A narrower job, for models too small for the full repair.
+///
+/// SmolLM2 360M answers the instructions above by repeating them — measured on
+/// a phone and on a desktop, so it is the model's ceiling rather than a
+/// delivery problem. Asking less of it is the only lever left that does not
+/// involve a bigger download: two concrete jobs, no conditionals, no "if one
+/// matches a known term".
+const SIMPLE_INSTRUCTIONS: &str = "Tidy this dictated text.
+- Write any email or web address the normal way.
+- Start a new paragraph where the subject changes.
+- Change nothing else.
+Reply with the text only.";
+
+/// Which instructions a model gets.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Style {
+    /// The full repair, for models that can follow it.
+    Repair,
+    /// Two jobs only, for models that cannot.
+    Tidy,
+}
+
 /// Build the prompt for one utterance.
 ///
 /// `vocabulary` is the user's terms — names, domains, jargon — and is the
@@ -39,10 +61,15 @@ Rewrite it as the text the speaker meant.
 /// a 448-token context it shares with the transcript; here the list is cheap,
 /// and it converts the model's riskiest failure into its most reliable
 /// behaviour.
-pub fn prompt(transcript: &str, vocabulary: &[String]) -> String {
+pub fn prompt(transcript: &str, vocabulary: &[String], style: Style) -> String {
     let mut out = String::with_capacity(transcript.len() + 512);
-    out.push_str(INSTRUCTIONS);
-    if !vocabulary.is_empty() {
+    out.push_str(match style {
+        Style::Repair => INSTRUCTIONS,
+        Style::Tidy => SIMPLE_INSTRUCTIONS,
+    });
+    // A model that cannot follow three instructions will not use a glossary
+    // either, and every extra line is one more thing for it to echo.
+    if style == Style::Repair && !vocabulary.is_empty() {
         out.push_str("\n\nKnown terms: ");
         out.push_str(&vocabulary.join(", "));
     }
@@ -102,12 +129,22 @@ pub fn clean(reply: &str, transcript: &str) -> String {
     // and through ollama on a desktop -- so this is the model's ceiling, not a
     // delivery problem. Pasting the instructions into someone's message is the
     // worst outcome available, and it is cheap to refuse.
+    //
+    // Both prompts are listed. The first version only knew the full repair's
+    // phrases, so switching a model to the narrower prompt would have let it
+    // echo *those* instructions straight into someone's message instead.
     const ECHOES: &[&str] = &[
+        // the full repair
         "Fix only transcription artefacts",
         "Reply with the corrected text only",
         "Rebuild web and email addresses",
         "You repair dictation",
         "Known terms:",
+        // the narrower job
+        "Tidy this dictated text",
+        "Write any email or web address the normal way",
+        "Start a new paragraph where the subject changes",
+        "Reply with the text only",
     ];
     if ECHOES.iter().any(|e| s.contains(e)) {
         return transcript.trim().to_string();
@@ -128,14 +165,14 @@ mod tests {
 
     #[test]
     fn vocabulary_reaches_the_prompt() {
-        let p = prompt("k e v i n dot com", &["kevin-mooney.com".to_string()]);
+        let p = prompt("k e v i n dot com", &["kevin-mooney.com".to_string()], Style::Repair);
         assert!(p.contains("Known terms: kevin-mooney.com"));
         assert!(p.trim_end().ends_with("k e v i n dot com"));
     }
 
     #[test]
     fn no_vocabulary_means_no_empty_section() {
-        let p = prompt("hello", &[]);
+        let p = prompt("hello", &[], Style::Repair);
         assert!(!p.contains("Known terms"));
     }
 
@@ -241,5 +278,46 @@ mod echo_tests {
             clean("https://kevin-mooney.com", "k e v i n dot com"),
             "https://kevin-mooney.com"
         );
+    }
+}
+
+#[cfg(test)]
+mod style_tests {
+    use super::*;
+
+    #[test]
+    fn tidy_asks_for_two_jobs_and_no_glossary() {
+        let p = prompt("hello there", &["kevin-mooney.com".to_string()], Style::Tidy);
+        assert!(p.contains("Start a new paragraph"));
+        assert!(p.contains("email or web address"));
+        assert!(!p.contains("Known terms"),
+                "a model that cannot follow three rules will not use a glossary");
+        assert!(!p.contains("transcription artefacts"));
+    }
+
+    #[test]
+    fn repair_is_unchanged() {
+        let p = prompt("hello", &["a-term".to_string()], Style::Repair);
+        assert!(p.contains("Fix only transcription artefacts"));
+        assert!(p.contains("Known terms: a-term"));
+    }
+}
+
+#[cfg(test)]
+mod tidy_echo_tests {
+    use super::clean;
+
+    /// The narrower prompt has to be echo-protected too, or switching a model
+    /// to it simply changes which instructions get pasted into a message.
+    #[test]
+    fn an_echo_of_the_tidy_prompt_falls_back() {
+        let t = "meet me at noon";
+        for echo in [
+            "Tidy this dictated text.\n- Write any email or web address the normal way.",
+            "- Start a new paragraph where the subject changes.\n- Change nothing else.",
+            "Reply with the text only.",
+        ] {
+            assert_eq!(clean(echo, t), t, "not caught: {echo}");
+        }
     }
 }

@@ -55,8 +55,9 @@ public final class Polisher {
     /// a sentence sometimes writes an essay instead, and that is paid for in
     /// seconds the user spends waiting.
     public func polish(_ transcript: String, vocabulary: [String] = [],
+                       simplePrompt: Bool = false,
                        maxTokens: Int = 256) -> String? {
-        let prompt = sharedPrompt(transcript, vocabulary)
+        let prompt = sharedPrompt(transcript, vocabulary, simplePrompt)
         #if DEBUG
         NSLog("openflow: polish prompt is %d chars", prompt.count)
         #endif
@@ -91,11 +92,12 @@ public final class Polisher {
     // Both of these are `openflow-core`, through the same C ABI the formatter
     // already uses. The point is that Windows asks the model the same question.
 
-    private func sharedPrompt(_ transcript: String, _ vocabulary: [String]) -> String {
+    private func sharedPrompt(_ transcript: String, _ vocabulary: [String],
+                              _ simple: Bool) -> String {
         let vocab = vocabulary.joined(separator: "\n")
         return transcript.withCString { t in
             vocab.withCString { v in
-                guard let p = of_polish_prompt(t, v) else { return "" }
+                guard let p = of_polish_prompt(t, v, simple ? 1 : 0) else { return "" }
                 defer { of_string_free(p) }
                 return String(cString: p)
             }
