@@ -188,7 +188,11 @@ public final class DictationEngine {
         // with its layers on the GPU, it cannot run once the app is
         // backgrounded, which is where the keyboard always runs it.
         #if canImport(CLlamaShim)
-        if polisher?.usesGPU != gpu { warmUpPolish() }
+        // Only when one is loaded for the wrong backend. Testing
+        // `polisher?.usesGPU != gpu` was true while `polisher` was still nil,
+        // so at launch this fired on top of the warm-up the selection had
+        // already started and the model loaded twice.
+        if let current = polisher, current.usesGPU != gpu { warmUpPolish() }
         #endif
         guard !modelPath.isEmpty else { return }
         work.async { [self] in
@@ -544,6 +548,9 @@ public final class DictationEngine {
                          speechModel: (modelPath as NSString).lastPathComponent,
                          polishModel: (polishModelPath as NSString).lastPathComponent,
                          polishedText: polished == raw ? "" : polished,
+                         breakTimes: transcriber.lastParagraphBreaks
+                             .map { String(format: "%.1f", $0) }
+                             .joined(separator: ","),
                          durationMS: audioMS,
                          latencyMS: latencyMS, guardrailPassed: result.ok,
                          ledger: ledgerJSON, appContext: appContext,

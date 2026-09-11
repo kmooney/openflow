@@ -26,6 +26,10 @@ public struct Utterance: Sendable {
     /// the pipeline, kept so the history can show all three stages rather than
     /// just the ends.
     public let polishedText: String
+    /// Seconds into the recording at which each paragraph break fell, comma
+    /// separated. The audit line shows them, so a break in the wrong place can
+    /// be traced to the pause that caused it.
+    public let breakTimes: String
 }
 
 public struct Stats: Sendable {
@@ -97,6 +101,7 @@ public final class Store {
         exec("ALTER TABLE utterances ADD COLUMN speech_model TEXT NOT NULL DEFAULT '';")
         exec("ALTER TABLE utterances ADD COLUMN polish_model TEXT NOT NULL DEFAULT '';")
         exec("ALTER TABLE utterances ADD COLUMN polished_text TEXT NOT NULL DEFAULT '';")
+        exec("ALTER TABLE utterances ADD COLUMN break_times TEXT NOT NULL DEFAULT '';")
     }
 
     deinit { if let db { sqlite3_close(db) } }
@@ -116,7 +121,7 @@ public final class Store {
     @discardableResult
     public func record(raw: String, final: String, tone: Tone, spokenWords: Int,
                        speechModel: String = "", polishModel: String = "",
-                       polishedText: String = "",
+                       polishedText: String = "", breakTimes: String = "",
                        durationMS: Int, latencyMS: Int, guardrailPassed: Bool,
                        ledger: String, appContext: String?, audioPath: String? = nil,
                        outcome: String = "ok") -> Int64 {
@@ -125,8 +130,8 @@ public final class Store {
             INSERT INTO utterances
               (created_at,duration_ms,raw_text,final_text,tone,spoken_words,
                latency_ms,guardrail_passed,ledger,app_context,audio_path,outcome,
-               speech_model,polish_model,polished_text)
-            VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?);
+               speech_model,polish_model,polished_text,break_times)
+            VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?);
             """
             var st: OpaquePointer?
             guard sqlite3_prepare_v2(db, sql, -1, &st, nil) == SQLITE_OK else { return -1 }
@@ -154,6 +159,7 @@ public final class Store {
             sqlite3_bind_text(st, 13, speechModel, -1, SQLITE_TRANSIENT)
             sqlite3_bind_text(st, 14, polishModel, -1, SQLITE_TRANSIENT)
             sqlite3_bind_text(st, 15, polishedText, -1, SQLITE_TRANSIENT)
+            sqlite3_bind_text(st, 16, breakTimes, -1, SQLITE_TRANSIENT)
             guard sqlite3_step(st) == SQLITE_DONE else { return -1 }
             return sqlite3_last_insert_rowid(db)
         }
@@ -196,7 +202,7 @@ public final class Store {
             let sql = """
             SELECT id,created_at,duration_ms,raw_text,final_text,tone,spoken_words,
                    latency_ms,guardrail_passed,ledger,audio_path,outcome,
-                   speech_model,polish_model,polished_text
+                   speech_model,polish_model,polished_text,break_times
             FROM utterances
             \(filter.isEmpty ? "" : "WHERE raw_text LIKE ?1 OR final_text LIKE ?1")
             ORDER BY created_at DESC LIMIT ?2 OFFSET ?3;
@@ -228,7 +234,7 @@ public final class Store {
                     audioPath: sqlite3_column_type(st, 10) == SQLITE_NULL ? nil : text(10),
                     outcome: text(11).isEmpty ? "ok" : text(11),
                     speechModel: text(12), polishModel: text(13),
-                    polishedText: text(14)))
+                    polishedText: text(14), breakTimes: text(15)))
             }
             return out
         }

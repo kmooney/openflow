@@ -51,12 +51,24 @@ public final class Polisher {
     /// usable — so the caller keeps what the user said rather than pasting an
     /// empty string.
     ///
-    /// `maxTokens` is a hard stop, not a target. A small model asked to repair
-    /// a sentence sometimes writes an essay instead, and that is paid for in
-    /// seconds the user spends waiting.
+    /// The token budget scales with the input, because a fixed one truncates.
+    /// 256 was fine for a sentence and cuts a 200-word email off mid-word —
+    /// and a truncated message is the one bad output nothing downstream can
+    /// detect, because half an email reads exactly like a whole one.
+    ///
+    /// Still a hard stop rather than a target: a small model asked to tidy a
+    /// sentence sometimes writes an essay, and that is paid in seconds the
+    /// user spends waiting.
+    private func budget(for transcript: String) -> Int {
+        let words = transcript.split(whereSeparator: \.isWhitespace).count
+        // ~1.35 tokens per English word, doubled for layout and headroom.
+        return min(1600, max(256, Int(Double(words) * 2.7)))
+    }
+
     public func polish(_ transcript: String, vocabulary: [String] = [],
                        simplePrompt: Bool = false, promptSuffix: String = "",
-                       maxTokens: Int = 256) -> String? {
+                       maxTokens: Int? = nil) -> String? {
+        let maxTokens = maxTokens ?? budget(for: transcript)
         let prompt = sharedPrompt(transcript, vocabulary, simplePrompt) + promptSuffix
         #if DEBUG
         NSLog("openflow: polish prompt is %d chars", prompt.count)
@@ -78,6 +90,14 @@ public final class Polisher {
               String(cString: buffer).replacingOccurrences(of: "\n", with: "⏎"))
         #endif
         guard produced > 0 else { return nil }
+        // Stopping because the budget ran out, rather than because the model
+        // finished, means the text is cut off somewhere. Keep the transcript:
+        // an unpolished message beats half a polished one.
+        if Int(produced) >= maxTokens {
+            NSLog("openflow: polish hit the %d-token budget — discarding a truncated reply",
+                  maxTokens)
+            return nil
+        }
 
         lastTokenCount = Int(produced)
         lastTokensPerSecond = seconds > 0 ? Double(produced) / seconds : 0

@@ -1,5 +1,6 @@
 import Foundation
 import CWhisper
+import COpenFlow
 
 /// whisper.cpp, wrapped. Shared by macOS and iOS -- the only difference
 /// between them is which model size they can afford to load.
@@ -22,6 +23,17 @@ public final class Transcriber {
     /// by a bare `guard ... else { return }` and surfaced to the user as "no
     /// words recognised", which sent every investigation at the microphone.
     public private(set) var lastStatus: Int32 = 0
+
+    /// The pause length that counted as a paragraph on the last transcription,
+    /// derived from the speaker's own gaps. Exposed for the console, because a
+    /// threshold nobody can see is one nobody can tune.
+    public private(set) var lastParagraphThresholdMS: Int64 = 0
+
+    /// When each paragraph break fell, in seconds from the start of the
+    /// recording. Kept beside the text rather than written into it: the
+    /// transcript is what gets pasted, and a timestamp in someone's email is
+    /// not a feature.
+    public private(set) var lastParagraphBreaks: [Double] = []
 
     public init?(modelPath: String, useGPU: Bool = true) {
         var cp = whisper_context_default_params()
@@ -71,7 +83,11 @@ public final class Transcriber {
                 p.print_progress = false
                 p.print_realtime = false
                 p.print_timestamps = false
-                p.no_timestamps = true
+                // Timestamps on, because the gaps between segments are the
+                // paragraph breaks. whisper already knows when the speaker
+                // paused; this used to throw that away and then ask a language
+                // model to guess it back.
+                p.no_timestamps = false
                 p.translate = false
                 p.language = lptr
                 p.suppress_blank = true
@@ -85,11 +101,47 @@ public final class Transcriber {
                               status, usesGPU ? "yes" : "no", buf.count)
                         return
                     }
+
+                    // Segment text plus the silence before it. whisper reports
+                    // times in centiseconds.
+                    var pieces: [String] = []
+                    var gaps: [Int64] = []
+                    var previousEnd: Int64 = -1
                     for i in 0..<whisper_full_n_segments(ctx) {
-                        if let t = whisper_full_get_segment_text(ctx, i) {
-                            result += String(cString: t)
-                        }
+                        guard let t = whisper_full_get_segment_text(ctx, i) else { continue }
+                        let start = whisper_full_get_segment_t0(ctx, i) * 10
+                        if previousEnd >= 0 { gaps.append(max(0, start - previousEnd)) }
+                        previousEnd = whisper_full_get_segment_t1(ctx, i) * 10
+                        pieces.append(String(cString: t))
                     }
+
+                    // The threshold comes from this speaker's own pauses: a
+                    // brisk talker's new-thought gap is shorter than a slow
+                    // talker's comma, so any constant is wrong for someone.
+                    let threshold = gaps.withUnsafeBufferPointer {
+                        of_paragraph_threshold_ms($0.baseAddress, $0.count)
+                    }
+                    lastParagraphThresholdMS = threshold
+                    #if DEBUG
+                    if !gaps.isEmpty {
+                        NSLog("openflow: segment gaps %@ → paragraph at %lld ms",
+                              gaps.map(String.init).joined(separator: ","), threshold)
+                    }
+                    #endif
+
+                    var breaks: [Double] = []
+                    var starts: [Int64] = []
+                    for i in 0..<whisper_full_n_segments(ctx) {
+                        starts.append(whisper_full_get_segment_t0(ctx, i) * 10)
+                    }
+                    for (i, piece) in pieces.enumerated() {
+                        if i > 0, gaps[i - 1] >= threshold {
+                            result += "\n\n"
+                            breaks.append(Double(starts[i]) / 1000)
+                        }
+                        result += piece
+                    }
+                    lastParagraphBreaks = breaks
                 }
             }
         }

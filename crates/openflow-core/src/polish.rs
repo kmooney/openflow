@@ -62,6 +62,83 @@ pub enum Style {
     Tidy,
 }
 
+/// How long a pause has to be before it means a new paragraph.
+///
+/// The speaker's own pauses are the best paragraph signal available, and the
+/// only one that reflects what they actually did rather than what a model
+/// guesses they meant. It is also free: whisper already segments speech and
+/// records when each segment starts and ends, and that timing was being
+/// discarded.
+///
+/// 700ms is chosen to sit above ordinary sentence-boundary pauses — which run
+/// roughly 200-500ms in connected speech — and below the beat someone takes
+/// when moving to a new thought. It is a starting point to be tuned against
+/// real dictation, not a measured constant, and it errs long: a missed break
+/// leaves a wall of text, while a spurious one chops a sentence in half.
+pub const PARAGRAPH_GAP_MS: i64 = 700;
+
+/// Never break on a pause shorter than this, however brisk the speaker.
+const PARAGRAPH_FLOOR_MS: i64 = 350;
+/// Never require one longer than this, however slow.
+const PARAGRAPH_CEILING_MS: i64 = 2_500;
+/// Below this many gaps the distribution says nothing and the fixed default is
+/// the better guess.
+const PARAGRAPH_MIN_SAMPLES: usize = 4;
+
+/// Where the paragraph breaks fall, for one utterance, in milliseconds.
+///
+/// **Derived from the speaker, not fixed.** A brisk talker's new-thought pause
+/// is shorter than a slow talker's comma, so any constant is wrong for someone:
+/// too low and it chops sentences in half, too high and it produces the wall of
+/// text this exists to prevent.
+///
+/// Most gaps in an utterance are ordinary sentence and phrase boundaries, so
+/// the paragraph pauses are the outliers — `median + 2 x IQR` is the standard
+/// way to say "unusually long for this speaker, today". Clamped at both ends so
+/// a pathological distribution cannot produce a nonsense threshold, and backed
+/// by the fixed default when there are too few gaps to describe anything.
+pub fn paragraph_threshold_ms(gaps: &[i64]) -> i64 {
+    if gaps.len() < PARAGRAPH_MIN_SAMPLES {
+        return PARAGRAPH_GAP_MS;
+    }
+    let mut sorted: Vec<i64> = gaps.to_vec();
+    sorted.sort_unstable();
+
+    let at = |frac: f64| -> i64 {
+        let i = ((sorted.len() - 1) as f64 * frac).round() as usize;
+        sorted[i]
+    };
+    let median = at(0.5);
+    let iqr = at(0.75) - at(0.25);
+
+    (median + 2 * iqr).clamp(PARAGRAPH_FLOOR_MS, PARAGRAPH_CEILING_MS)
+}
+
+/// Does a gap of this length mean a paragraph, given the speaker's own pauses?
+pub fn is_paragraph_gap(gap_ms: i64, threshold_ms: i64) -> bool {
+    gap_ms >= threshold_ms
+}
+
+/// Above this many words, dictation stops being a line and starts being a
+/// message — and a message that arrives as one unbroken block is unusable
+/// however correct its words are.
+pub const EMAIL_SHAPE_WORDS: usize = 100;
+
+/// What a long message should look like, in instructions a small model can
+/// act on.
+///
+/// "Start a new paragraph where the subject changes" is a judgement call, and
+/// a 0.6B model answers judgement calls by doing nothing — measured, as a wall
+/// of text. These are mechanical: a line for the greeting, short paragraphs,
+/// a line for the sign-off. Concrete enough to follow without understanding
+/// the message.
+const EMAIL_SHAPE: &str = "
+
+This is a long message, so lay it out like a short email:
+- Put the greeting on its own line, followed by a blank line.
+- Break the body into paragraphs of two or three sentences, separated by blank lines.
+- Put the sign-off and name on their own lines at the end.";
+
 /// Build the prompt for one utterance.
 ///
 /// `vocabulary` is the user's terms — names, domains, jargon — and is the
@@ -81,7 +158,13 @@ pub fn prompt(transcript: &str, vocabulary: &[String], style: Style) -> String {
         out.push_str("\n\nKnown terms: ");
         out.push_str(&vocabulary.join(", "));
     }
-    out.push_str("\n\nLine:\n");
+    // Only for messages long enough to need it. Asking for an email layout on
+    // a six-word reply produces a six-word email, greeting and all.
+    if transcript.split_whitespace().count() >= EMAIL_SHAPE_WORDS {
+        out.push_str(EMAIL_SHAPE);
+    }
+
+    out.push_str("\n\nText:\n");
     out.push_str(transcript.trim());
     out
 }
@@ -353,5 +436,98 @@ mod unclosed_think_tests {
     #[test]
     fn closed_reasoning_yields_the_answer() {
         assert_eq!(clean("<think>hmm</think>\nHi John,", "x"), "Hi John,");
+    }
+}
+
+#[cfg(test)]
+mod email_shape_tests {
+    use super::*;
+
+    fn words(n: usize) -> String {
+        vec!["word"; n].join(" ")
+    }
+
+    /// A long message gets told what shape to take. "Where the subject
+    /// changes" is a judgement call, and small models answer those by doing
+    /// nothing — which is the wall of text this exists to prevent.
+    #[test]
+    fn long_messages_ask_for_an_email_layout() {
+        let p = prompt(&words(EMAIL_SHAPE_WORDS), &[], Style::Repair);
+        assert!(p.contains("lay it out like a short email"));
+        assert!(p.contains("greeting on its own line"));
+        assert!(p.contains("two or three sentences"));
+    }
+
+    /// And a short one does not. Asking for an email layout on a six-word
+    /// reply produces a six-word email, greeting and all.
+    #[test]
+    fn short_messages_are_left_alone() {
+        let p = prompt("tell him I am running late", &[], Style::Repair);
+        assert!(!p.contains("short email"));
+    }
+
+    #[test]
+    fn the_threshold_is_inclusive() {
+        assert!(prompt(&words(EMAIL_SHAPE_WORDS), &[], Style::Repair).contains("short email"));
+        assert!(!prompt(&words(EMAIL_SHAPE_WORDS - 1), &[], Style::Repair).contains("short email"));
+    }
+
+    /// The narrow prompt gets it too: a small model on a long message is
+    /// exactly the case that produced the wall of text.
+    #[test]
+    fn the_narrow_prompt_gets_it_as_well() {
+        let p = prompt(&words(EMAIL_SHAPE_WORDS), &[], Style::Tidy);
+        assert!(p.contains("lay it out like a short email"));
+    }
+}
+
+#[cfg(test)]
+mod paragraph_tests {
+    use super::*;
+
+    /// A brisk speaker: every pause is short, and the one long one is still
+    /// short in absolute terms. A fixed 700ms would find no paragraphs here.
+    #[test]
+    fn adapts_to_a_fast_speaker() {
+        let gaps = [120, 150, 130, 140, 160, 520];
+        let t = paragraph_threshold_ms(&gaps);
+        assert!(is_paragraph_gap(520, t), "the outlier must break (threshold {t})");
+        assert!(!is_paragraph_gap(160, t), "an ordinary pause must not");
+    }
+
+    /// A slow speaker: every pause is long. A fixed 700ms would break almost
+    /// every sentence and shred the message.
+    #[test]
+    fn adapts_to_a_slow_speaker() {
+        let gaps = [700, 760, 720, 800, 740, 1900];
+        let t = paragraph_threshold_ms(&gaps);
+        assert!(is_paragraph_gap(1900, t), "the outlier must break (threshold {t})");
+        assert!(!is_paragraph_gap(800, t), "an ordinary pause must not (threshold {t})");
+    }
+
+    /// Even pauses mean one paragraph. Nothing here is unusual, so nothing
+    /// should break.
+    #[test]
+    fn even_pauses_produce_no_breaks() {
+        let gaps = [300, 310, 295, 305, 300, 315];
+        let t = paragraph_threshold_ms(&gaps);
+        assert!(gaps.iter().all(|g| !is_paragraph_gap(*g, t)),
+                "threshold {t} broke an evenly-paced utterance");
+    }
+
+    /// Too few gaps to describe a speaker: fall back rather than invent a
+    /// threshold from two numbers.
+    #[test]
+    fn too_few_samples_uses_the_default() {
+        assert_eq!(paragraph_threshold_ms(&[100, 200]), PARAGRAPH_GAP_MS);
+        assert_eq!(paragraph_threshold_ms(&[]), PARAGRAPH_GAP_MS);
+    }
+
+    /// A pathological distribution must not produce a nonsense threshold.
+    #[test]
+    fn the_threshold_is_clamped() {
+        assert!(paragraph_threshold_ms(&[0, 0, 0, 0, 0, 0]) >= PARAGRAPH_FLOOR_MS);
+        assert!(paragraph_threshold_ms(&[0, 0, 0, 60_000, 60_000, 60_000])
+                <= PARAGRAPH_CEILING_MS);
     }
 }
