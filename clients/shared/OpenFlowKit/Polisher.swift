@@ -74,8 +74,8 @@ public final class Polisher {
         // The reply verbatim, before cleanup. Without it, "the model changed
         // nothing" and "the model said something cleanup threw away" look the
         // same, and they are opposite problems.
-        NSLog("openflow: llama produced %d tokens in %.2fs |%@|",
-              produced, seconds, String(cString: buffer))
+        NSLog("openflow: llama produced %d tokens in %.2fs |%@|", produced, seconds,
+              String(cString: buffer).replacingOccurrences(of: "\n", with: "⏎"))
         #endif
         guard produced > 0 else { return nil }
 

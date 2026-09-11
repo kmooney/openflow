@@ -493,7 +493,11 @@ public final class DictationEngine {
                 NSLog("openflow: polish made no change (%@)",
                       (polishModelPath as NSString).lastPathComponent)
             } else {
-                NSLog("openflow: polish |%@| (%.1f tok/s)", polished,
+                // Newlines flattened: the whole point of this stage is that it
+                // adds paragraph breaks, and a multi-line NSLog shows only its
+                // first line in the console.
+                NSLog("openflow: polish |%@| (%.1f tok/s)",
+                      polished.replacingOccurrences(of: "\n", with: "⏎"),
                       self.lastPolishTokensPerSecond)
             }
             NSLog("openflow: format |%@|%@", result.formatted,
@@ -506,10 +510,15 @@ public final class DictationEngine {
             let ledgerJSON = (try? JSONEncoder().encode(result.ledger))
                 .flatMap { String(data: $0, encoding: .utf8) } ?? "[]"
 
-            store.record(raw: result.raw, final: result.formatted, tone: tone,
+            // `raw` is what whisper heard, NOT `result.raw`. A FormatResult's
+            // `raw` is the formatter's own input, which by this point is the
+            // polish model's output — so the history's "heard" line was showing
+            // the model's rewrite, and the audit trail was confirming itself.
+            store.record(raw: raw, final: result.formatted, tone: tone,
                          spokenWords: result.spokenWords,
                          speechModel: (modelPath as NSString).lastPathComponent,
                          polishModel: (polishModelPath as NSString).lastPathComponent,
+                         polishedText: polished == raw ? "" : polished,
                          durationMS: audioMS,
                          latencyMS: latencyMS, guardrailPassed: result.ok,
                          ledger: ledgerJSON, appContext: appContext,

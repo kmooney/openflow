@@ -223,6 +223,18 @@ struct Stat: View {
     }
 }
 
+/// One line of the audit trail: what a stage produced, labelled with which.
+@ViewBuilder
+private func stage(_ symbol: String, _ name: String, _ text: String) -> some View {
+    HStack(alignment: .firstTextBaseline, spacing: 4) {
+        Image(systemName: symbol).font(.caption2)
+        Text(name).font(.caption2.weight(.medium))
+        Text(text).font(.caption2)
+    }
+    .foregroundStyle(.secondary)
+    .textSelection(.enabled)
+}
+
 /// Turn a stored filename back into the catalogue's display name.
 ///
 /// The filename is what gets stored, because it is what the engine has and it
@@ -282,16 +294,15 @@ struct HistoryList: View {
 
                     if u.outcome == "ok" {
                         Text(u.finalText).font(.body)
-                        // What whisper actually heard, whenever the formatter
-                        // changed it. The pipeline is only trustworthy if you
-                        // can see what each stage did — and when a rebuilt
-                        // address comes out wrong, this is the line that says
-                        // whether the model or the rules got it wrong.
-                        if u.rawText != u.finalText, !u.rawText.isEmpty {
-                            Label(u.rawText, systemImage: "ear")
-                                .font(.caption2)
-                                .foregroundStyle(.secondary)
-                                .textSelection(.enabled)
+                        // Every stage that changed something, in pipeline order.
+                        // Three stages produce this text and any of them can be
+                        // the one that got it wrong; a trail that only shows
+                        // the ends cannot tell you which.
+                        if !u.rawText.isEmpty, u.rawText != u.finalText {
+                            stage("ear", "heard", u.rawText)
+                        }
+                        if !u.polishedText.isEmpty, u.polishedText != u.finalText {
+                            stage("wand.and.sparkles", "polished", u.polishedText)
                         }
                     }
                     ForEach(Array(LedgerEntry.decode(u.ledger).enumerated()), id: \.offset) { _, e in
