@@ -141,7 +141,12 @@ pub fn is_paragraph_gap(gap_ms: i64, threshold_ms: i64) -> bool {
 /// Above this many words, dictation stops being a line and starts being a
 /// message — and a message that arrives as one unbroken block is unusable
 /// however correct its words are.
-pub const EMAIL_SHAPE_WORDS: usize = 100;
+///
+/// Was 100, which is too high: a real dictated email came to 90 words, missed
+/// the threshold by ten, and arrived as one paragraph. Nobody dictating sixty
+/// words is writing a single thought, and the cost of asking for a layout that
+/// turns out not to be needed is one unnecessary line break.
+pub const EMAIL_SHAPE_WORDS: usize = 60;
 
 /// What a long message should look like, in instructions a small model can
 /// act on.
@@ -475,6 +480,13 @@ mod email_shape_tests {
         assert!(p.contains("lay it out like a short email"));
         assert!(p.contains("greeting on its own line"));
         assert!(p.contains("two or three sentences"));
+    }
+
+    /// The 90-word email that missed the old 100-word threshold and came back
+    /// as one block.
+    #[test]
+    fn a_real_ninety_word_email_asks_for_a_layout() {
+        assert!(prompt(&words(90), &[], Style::Repair).contains("short email"));
     }
 
     /// And a short one does not. Asking for an email layout on a six-word

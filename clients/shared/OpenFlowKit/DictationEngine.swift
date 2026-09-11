@@ -553,6 +553,7 @@ public final class DictationEngine {
                              .joined(separator: ","),
                          pauses: transcriber.lastSegmentGaps
                              .map { "\($0)" }.joined(separator: ",")
+                             + (transcriber.lastTimingWasSound ? "" : " (timing unusable)")
                              + ";\(transcriber.lastParagraphThresholdMS)",
                          durationMS: audioMS,
                          latencyMS: latencyMS, guardrailPassed: result.ok,
