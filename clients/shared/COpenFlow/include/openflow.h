@@ -20,6 +20,10 @@ const char *of_version(void);
 /// too small to follow the full repair.
 char *of_polish_prompt(const char *transcript, const char *vocabulary, unsigned int simple);
 
+/// The trigger phrases in a dictionary file, newline-separated, for whisper's
+/// prompt. May be NULL. Returns owned UTF-8; free with of_string_free.
+char *of_dictionary_phrases(const char *dictionary);
+
 /// Salvage usable text from a model reply, falling back to the transcript when
 /// the reply is empty, a refusal, or obviously not a repair.
 /// Returns owned UTF-8; free with of_string_free. Never null.

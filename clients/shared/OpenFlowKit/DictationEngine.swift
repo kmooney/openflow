@@ -403,6 +403,18 @@ public final class DictationEngine {
         state = .thinking
         let tone = self.tone
         let vocab = self.vocabulary
+        // The dictionary's trigger phrases go to whisper too.
+        //
+        // A shortcut only fires if the phrase was transcribed correctly, and
+        // the phrases people invent — "new graf" — are exactly the ones whisper
+        // has no reason to expect. Telling it they are coming is the cheapest
+        // fix available: no fuzzy matching, no second guess about what was
+        // meant, just the same file used at both ends of the pipeline.
+        //
+        // Whisper's prompt only, not the polish model's: the model's job is to
+        // repair the transcript, and a list of trigger words would invite it to
+        // rewrite them.
+        let heard = vocab + Formatter.dictionaryPhrases(dictionary)
         let keepAudio = self.keepAudio
         let support = self.supportDirectory
         let rejectNonSpeech = self.rejectNonSpeech
@@ -478,7 +490,7 @@ public final class DictationEngine {
                 NSLog("openflow: lifted quiet capture by %.1f dB before transcription", gainDB)
             }
 
-            var raw = transcriber.transcribe(samples: levelled, vocabulary: vocab)
+            var raw = transcriber.transcribe(samples: levelled, vocabulary: heard)
 
             // A failed whisper run and a silent one both come back as "".
             // Retry once on the CPU: Metal is the only part of this that has
@@ -491,7 +503,7 @@ public final class DictationEngine {
                 NSLog("openflow: whisper failed on the GPU (%d) — retrying on the CPU", status)
                 if let cpu = Transcriber(modelPath: modelPath, useGPU: false) {
                     self.transcriber = cpu
-                    raw = cpu.transcribe(samples: levelled, vocabulary: vocab)
+                    raw = cpu.transcribe(samples: levelled, vocabulary: heard)
                     if !raw.isEmpty {
                         DispatchQueue.main.async {
                             self.onNotice?("Switched to CPU transcription — the GPU path failed (\(status)).")

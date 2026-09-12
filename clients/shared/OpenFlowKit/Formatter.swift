@@ -58,6 +58,20 @@ public enum Formatter {
                             writtenWords: raw.split(separator: " ").count, ledger: [])
     }
 
+    /// The trigger phrases in a dictionary file.
+    ///
+    /// Parsed in Rust, like everything else about that file, so there is one
+    /// answer to "what counts as an entry" across all three clients.
+    public static func dictionaryPhrases(_ dictionary: String) -> [String] {
+        guard !dictionary.isEmpty else { return [] }
+        let joined: String = dictionary.withCString { ptr in
+            guard let out = of_dictionary_phrases(ptr) else { return "" }
+            defer { of_string_free(out) }
+            return String(cString: out)
+        }
+        return joined.split(separator: "\n").map(String.init)
+    }
+
     public static var coreVersion: String {
         guard let v = of_version() else { return "?" }
         return String(cString: v)

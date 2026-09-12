@@ -188,6 +188,34 @@ pub extern "C" fn of_polish_prompt(
         .into_raw()
 }
 
+/// The trigger phrases in a dictionary file, newline-separated.
+///
+/// For whisper's prompt. A shortcut only fires if the phrase is transcribed
+/// correctly, and a phrase someone invented ("new graf") is exactly the kind of
+/// thing whisper has no reason to expect -- so the words that drive the
+/// dictionary are told to the speech model before it listens. Same file, both
+/// ends of the pipeline.
+///
+/// Returns owned UTF-8; free with `of_string_free`. Never null.
+#[no_mangle]
+pub extern "C" fn of_dictionary_phrases(dictionary: *const c_char) -> *mut c_char {
+    let empty = || CString::new("").unwrap().into_raw();
+    if dictionary.is_null() {
+        return empty();
+    }
+    let text = match unsafe { CStr::from_ptr(dictionary) }.to_str() {
+        Ok(s) => s,
+        Err(_) => return empty(),
+    };
+    let phrases: Vec<String> = dictionary::parse(text)
+        .into_iter()
+        .map(|e| e.phrase)
+        .collect();
+    CString::new(phrases.join("\n"))
+        .unwrap_or_else(|_| CString::new("").unwrap())
+        .into_raw()
+}
+
 /// Salvage usable text from a model's reply, falling back to the transcript.
 #[no_mangle]
 pub extern "C" fn of_polish_clean(

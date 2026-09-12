@@ -20,7 +20,7 @@
 //! repair. If it is an address, it stays lower case at the start of a sentence,
 //! which is what an address should do.
 
-use crate::{find_phrase, Edit, EditReason};
+use crate::{Edit, EditReason};
 
 /// One phrase and what it expands to.
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -118,6 +118,10 @@ pub fn apply(s: &str, entries: &[Entry]) -> (String, Vec<Edit>) {
     let mut edits = Vec::new();
 
     for entry in entries {
+        let words = phrase_words(&entry.phrase);
+        if words.is_empty() {
+            continue;
+        }
         let eats_before = entry.replacement.starts_with(char::is_whitespace);
         let eats_after = entry.replacement.ends_with(char::is_whitespace);
         let opens_paragraph = entry.replacement.ends_with('\n');
@@ -127,7 +131,7 @@ pub fn apply(s: &str, entries: &[Entry]) -> (String, Vec<Edit>) {
         // ("my email = my email is kevin@...") would otherwise expand forever.
         let mut from = 0usize;
         while from < out.len() {
-            let Some((a, b)) = find_phrase(&out[from..], &entry.phrase) else {
+            let Some((a, b)) = match_phrase(&out[from..], &words) else {
                 break;
             };
             let (mut a, mut b) = (from + a, from + b);
@@ -154,6 +158,70 @@ pub fn apply(s: &str, entries: &[Entry]) -> (String, Vec<Edit>) {
         }
     }
     (out, edits)
+}
+
+/// Split a phrase into bare, lower-cased words.
+fn phrase_words(phrase: &str) -> Vec<String> {
+    phrase.split_whitespace().map(bare).filter(|w| !w.is_empty()).collect()
+}
+
+fn bare(token: &str) -> String {
+    token
+        .chars()
+        .filter(|c| c.is_alphanumeric() || *c == '\'')
+        .collect::<String>()
+        .to_lowercase()
+}
+
+/// Find the phrase in the text, ignoring how whisper spaced and punctuated it.
+///
+/// Matched on the letters of whole words rather than as a literal string,
+/// because a longer trigger is the best defence against a mishearing -- and a
+/// longer trigger is exactly what whisper rewrites on the way out. "open flow
+/// new paragraph" comes back as "OpenFlow, new paragraph.": a comma nobody
+/// said, and two words joined into one. A substring search finds neither, which
+/// would make the safest trigger the one least likely to fire.
+///
+/// Word boundaries still hold at both ends -- "cat" does not match "catalogue"
+/// -- because only whole words are ever accumulated.
+fn match_phrase(hay: &str, words: &[String]) -> Option<(usize, usize)> {
+    let target: String = words.concat();
+    let spans = word_spans(hay);
+
+    for i in 0..spans.len() {
+        let mut acc = String::new();
+        for span in &spans[i..] {
+            acc.push_str(&span.2);
+            if acc.len() > target.len() || !target.starts_with(&acc) {
+                break;
+            }
+            if acc == target {
+                return Some((spans[i].0, span.1));
+            }
+        }
+    }
+    None
+}
+
+/// Every run of word characters, as (start, end, lower-cased text).
+fn word_spans(hay: &str) -> Vec<(usize, usize, String)> {
+    let mut spans = Vec::new();
+    let mut start: Option<usize> = None;
+    for (i, c) in hay.char_indices() {
+        let part = c.is_alphanumeric() || c == '\'';
+        match (part, start) {
+            (true, None) => start = Some(i),
+            (false, Some(s)) => {
+                spans.push((s, i, hay[s..i].to_lowercase()));
+                start = None;
+            }
+            _ => {}
+        }
+    }
+    if let Some(s) = start {
+        spans.push((s, hay.len(), hay[s..].to_lowercase()));
+    }
+    spans
 }
 
 /// Whitespace and the marks that cling to a spoken instruction. Not `-`, which
@@ -281,6 +349,29 @@ mod tests {
         let d = parse("my email = kevin@example.com");
         let (out, _) = apply("Reach me at my email.", &d);
         assert_eq!(out, "Reach me at kevin@example.com.");
+    }
+
+    /// The user's own suggestion: a longer trigger is harder to mishear. It is
+    /// also the one whisper rewrites most -- a comma nobody said, and "open
+    /// flow" written as "OpenFlow" -- so the match has to survive both.
+    #[test]
+    fn a_sentence_length_trigger_survives_whispers_punctuation() {
+        let d = parse(r"open flow new paragraph = \n\n");
+        let (out, edits) = apply(
+            "That is the plan. OpenFlow, new paragraph. Let me know what you think.",
+            &d,
+        );
+        assert_eq!(out, "That is the plan\n\nLet me know what you think.");
+        assert_eq!(edits.len(), 1);
+    }
+
+    /// Consecutive words only -- the gap between them may be punctuation, never
+    /// another word.
+    #[test]
+    fn words_of_a_phrase_must_be_adjacent() {
+        let d = parse("my email = k@x.com");
+        let (out, _) = apply("my very old email", &d);
+        assert_eq!(out, "my very old email");
     }
 
     #[test]

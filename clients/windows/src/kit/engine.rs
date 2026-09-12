@@ -368,7 +368,16 @@ impl Engine {
             return self.fail("empty", &message, audio_ms, started, app_context, audio_path);
         };
 
-        let raw = transcriber.transcribe(&audio, &self.vocabulary);
+        // The dictionary's trigger phrases go to whisper as well. A shortcut
+        // only fires if its phrase was transcribed correctly, and the phrases
+        // people invent are the ones whisper has no reason to expect.
+        let mut heard = self.vocabulary.clone();
+        heard.extend(
+            openflow_core::dictionary::parse(&self.dictionary)
+                .into_iter()
+                .map(|e| e.phrase),
+        );
+        let raw = transcriber.transcribe(&audio, &heard);
         if raw.is_empty() {
             return self.fail(
                 "empty",
