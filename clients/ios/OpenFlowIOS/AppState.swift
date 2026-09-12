@@ -36,6 +36,17 @@ final class AppState: ObservableObject {
             if handoff?.tone() != tone { handoff?.setTone(tone) }
         }
     }
+    /// Whether the recording in flight belongs to the keyboard.
+    ///
+    /// Only a keyboard-owned transcript is offered for insertion. Everything
+    /// dictated here was offered too, on the theory that the user might switch
+    /// to a text field afterwards — so a note dictated in the app would be
+    /// pasted, unasked, into the next thing they typed in for the following
+    /// three minutes. The offer is a handoff, not a clipboard; text dictated
+    /// in the app stays in the app (and on the clipboard), and the history's
+    /// "Send to keyboard" action is there for the times it should go.
+    private var recordingIsForKeyboard = false
+
     /// Set when launched from the keyboard, so we can start listening at once
     /// and hand the result straight back.
     @Published var handedOffFromKeyboard = false
@@ -286,6 +297,7 @@ final class AppState: ObservableObject {
 
     private func openAndListen() {
         guard openMicrophone() else { return }
+        recordingIsForKeyboard = handedOffFromKeyboard
         engine.begin()
     }
 
@@ -325,6 +337,10 @@ final class AppState: ObservableObject {
 
     func begin() {
         UIImpactFeedbackGenerator(style: .medium).impactOccurred()
+        // Arriving from the keyboard makes this recording the keyboard's, even
+        // though the tap happened here: "Open OpenFlow" is the cold-start half
+        // of the same flow.
+        recordingIsForKeyboard = handedOffFromKeyboard
         // The keyboard is told we are live from `apply`, once the engine has
         // actually started -- not here. Setting it up front meant a failed
         // start left the flag stuck at "recording" forever, and the keyboard
@@ -342,6 +358,7 @@ final class AppState: ObservableObject {
             handoff?.setStatus("microphone closed — open OpenFlow")
             return
         }
+        recordingIsForKeyboard = true
         engine.begin()
     }
 
@@ -366,26 +383,35 @@ final class AppState: ObservableObject {
         switch result {
         case .success(let o):
             UIPasteboard.general.string = o.text
-            // Offer it to the keyboard whether or not we were launched
-            // by it: the user may switch to a text field afterwards,
-            // and the offer expires on its own if unused.
+            // Only the keyboard's own recordings are offered to it. One
+            // dictated here is finished here: it is in the history and on the
+            // clipboard, and "Send to keyboard" in the history is how it
+            // travels when the user wants it to.
             //
             // Not `try?`. If this write fails the transcript exists in history
             // and nowhere the keyboard can reach, which looks from the outside
             // exactly like a recording that worked and then vanished — the
             // clipboard copy above is the only thing standing between the user
             // and losing it, so say so.
-            do {
-                try handoff?.offer(o.text, tone: tone)
-                status = isLive
-                    ? "\(o.result.spokenWords) words · inserted"
-                    : "\(o.result.spokenWords) words · copied"
-            } catch {
-                NSLog("openflow: could not offer the transcript to the keyboard: %@",
-                      error.localizedDescription)
-                status = "Transcribed, but the keyboard could not be handed the text — it is on the clipboard."
-                handoff?.setFailure("could not hand over the text — it is on the clipboard")
+            if recordingIsForKeyboard {
+                do {
+                    try handoff?.offer(o.text, tone: tone)
+                    status = "\(o.result.spokenWords) words · inserted"
+                } catch {
+                    NSLog("openflow: could not offer the transcript to the keyboard: %@",
+                          error.localizedDescription)
+                    status = "Transcribed, but the keyboard could not be handed the text — it is on the clipboard."
+                    handoff?.setFailure("could not hand over the text — it is on the clipboard")
+                }
+            } else {
+                status = "\(o.result.spokenWords) words · copied"
             }
+            // The handoff is over either way. Without this the banner promising
+            // the keyboard is waiting stayed up for the rest of the session,
+            // and every later recording inherited a claim that was no longer
+            // true.
+            recordingIsForKeyboard = false
+            handedOffFromKeyboard = false
             UINotificationFeedbackGenerator().notificationOccurred(.success)
         case .failure(let e):
             status = e.localizedDescription
