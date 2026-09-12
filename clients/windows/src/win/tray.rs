@@ -21,6 +21,7 @@ pub enum Command {
     Settings,
     Models,
     EditVocabulary,
+    EditDictionary,
     PickTone(Tone),
     ForgetTone,
     Quit,
@@ -110,6 +111,7 @@ fn command_for(id: &str) -> Option<Command> {
         "settings" => Some(Command::Settings),
         "models" => Some(Command::Models),
         "vocab" => Some(Command::EditVocabulary),
+        "dictionary" => Some(Command::EditDictionary),
         "forget" => Some(Command::ForgetTone),
         "quit" => Some(Command::Quit),
         other => other
@@ -169,6 +171,7 @@ fn build_menu(state: &MenuState) -> Menu {
         None,
     );
     let vocab = MenuItem::with_id("vocab", "Edit vocabulary\u{2026}", true, None);
+    let dictionary = MenuItem::with_id("dictionary", "Edit dictionary\u{2026}", true, None);
     let quit = MenuItem::with_id("quit", "Quit OpenFlow", true, None);
 
     let mut items: Vec<&dyn tray_icon::menu::IsMenuItem> =
@@ -183,6 +186,7 @@ fn build_menu(state: &MenuState) -> Menu {
     items.push(&settings);
     items.push(&models);
     items.push(&vocab);
+    items.push(&dictionary);
     items.push(&separator);
     items.push(&quit);
 

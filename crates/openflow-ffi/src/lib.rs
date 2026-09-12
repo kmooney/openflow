@@ -5,6 +5,7 @@
 //! written once; everything platform-shaped (capture, hotkeys, insertion) stays
 //! in Swift.
 
+use openflow_core::dictionary;
 use openflow_core::*;
 use std::ffi::{c_char, CStr, CString};
 
@@ -32,11 +33,20 @@ fn tone_from(v: u32) -> Tone {
 /// Format a raw transcript. `tone`: 0 formal, 1 casual, 2 very casual.
 /// Returns owned JSON; the caller must pass it to `of_string_free`.
 ///
+/// `dictionary` is the user's shortcut file -- `phrase = replacement` lines,
+/// null or empty for none. It is applied here, at the end of the pipeline, and
+/// never handed to the polish model: an expansion the user wrote down is the
+/// one substitution that must come out exactly as they typed it.
+///
 /// Never returns null and never panics across the boundary: on any internal
 /// failure it returns the input unchanged with `"ok":false`, because dropping
 /// the user's words is worse than dropping the formatting.
 #[no_mangle]
-pub extern "C" fn of_format(input: *const c_char, tone: u32) -> *mut c_char {
+pub extern "C" fn of_format(
+    input: *const c_char,
+    tone: u32,
+    dictionary: *const c_char,
+) -> *mut c_char {
     let fallback = || CString::new("{\"ok\":false,\"formatted\":\"\"}").unwrap().into_raw();
     if input.is_null() {
         return fallback();
@@ -45,14 +55,24 @@ pub extern "C" fn of_format(input: *const c_char, tone: u32) -> *mut c_char {
         Ok(s) => s.trim(),
         Err(_) => return fallback(),
     };
+    let dict = if dictionary.is_null() {
+        ""
+    } else {
+        unsafe { CStr::from_ptr(dictionary) }.to_str().unwrap_or("")
+    };
 
     let res = std::panic::catch_unwind(|| {
         let cfg = Config::default();
         let policy = Policy::default();
         let tone = tone_from(tone);
 
-        let (formatted, edits) = format_with_edits(raw, &cfg);
-        let candidate = apply_letter_layout(&formatted, tone);
+        let (formatted, mut edits) = format_with_edits(raw, &cfg);
+        // After the rules, before the layout: the replacement is verbatim, so
+        // nothing downstream may recapitalize or repunctuate it, and the
+        // layout still gets to see the finished text.
+        let (expanded, shortcuts) = dictionary::apply(&formatted, &dictionary::parse(dict));
+        edits.extend(shortcuts);
+        let candidate = apply_letter_layout(&expanded, tone);
         let verdict = check_declared(raw, &candidate, &edits, &policy, &cfg);
 
         // The verdict is **reported, not enforced.**
@@ -215,8 +235,13 @@ mod tests {
     use super::*;
 
     fn format_through_ffi(s: &str) -> String {
+        format_with_dictionary(s, "")
+    }
+
+    fn format_with_dictionary(s: &str, dict: &str) -> String {
         let input = CString::new(s).unwrap();
-        let p = of_format(input.as_ptr(), 0);
+        let d = CString::new(dict).unwrap();
+        let p = of_format(input.as_ptr(), 0, d.as_ptr());
         let out = unsafe { CStr::from_ptr(p) }.to_string_lossy().to_string();
         of_string_free(p);
         out
@@ -252,6 +277,44 @@ mod tests {
             "my site is h-t-t-p-s colon slash slash kevin dash mooney dot com",
         );
         assert!(out.contains("\"ok\":false"), "the check still runs: {out}");
+    }
+
+    /// A user's own shortcut reaches the paste, and is declared rather than
+    /// smuggled -- so the verdict still passes and the ledger shows it.
+    #[test]
+    fn a_dictionary_entry_is_expanded_and_declared() {
+        let out = format_with_dictionary(
+            "you can reach me at my email any time",
+            "my email = kevin@example.com",
+        );
+        assert!(out.contains("kevin@example.com"), "{out}");
+        assert!(out.contains("\"ok\":true"), "{out}");
+        assert!(out.contains("Shortcut"), "the ledger must show it: {out}");
+    }
+
+    /// A null dictionary is the ordinary case and must not crash the boundary.
+    #[test]
+    fn a_null_dictionary_is_fine() {
+        let input = CString::new("hello there").unwrap();
+        let p = of_format(input.as_ptr(), 0, std::ptr::null());
+        let out = unsafe { CStr::from_ptr(p) }.to_string_lossy().to_string();
+        of_string_free(p);
+        assert!(out.contains("hello there"), "{out}");
+    }
+
+    /// The shape the user asked for: a dictated email comes back looking like
+    /// an email, not like a paragraph with a name stuck on the end.
+    #[test]
+    fn a_dictated_email_comes_back_in_email_shape() {
+        let out = format_with_dictionary(
+            "Hi Cynthia. I enjoyed our chat on Wednesday.\nI extended my answer into an essay.\nThanks again for your time. Best, Kevin",
+            "",
+        );
+        println!("{out}");
+        assert!(out.contains("Hi Cynthia.\\n\\n"), "salutation gets its blank line: {out}");
+        assert!(out.contains("Wednesday.\\n\\nI extended"), "sentences on their own lines become paragraphs: {out}");
+        assert!(out.ends_with("Best,\\nKevin\",") || out.contains("Best,\\nKevin"),
+                "the sign-off keeps its single break: {out}");
     }
 
     /// Ordinary prose is untouched and still passes cleanly.

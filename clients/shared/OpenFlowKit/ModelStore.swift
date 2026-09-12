@@ -27,8 +27,10 @@ public final class ModelStore: ObservableObject {
     private var tasks: [String: URLSessionDownloadTask] = [:]
     private var delegates: [String: DownloadDelegate] = [:]
 
-    /// Called when the active model changes, so the engine can reload.
-    public var onSelectionChanged: ((URL) -> Void)?
+    /// Called when the active model changes, so the engine can reload. `nil`
+    /// means the user chose no model at all, which is a real selection for the
+    /// polish store — not a failure to find a file.
+    public var onSelectionChanged: ((URL?) -> Void)?
 
     /// `defaultID` is what to select when the user has never chosen. iOS ships
     /// a model inside the app and starts there; macOS ships none and prefers
@@ -47,7 +49,12 @@ public final class ModelStore: ObservableObject {
         // A model can be deleted out from under the selection, and on macOS the
         // default may simply not be downloaded yet; never leave the app
         // pointing at something that is not there.
-        if location(of: selectedID) == nil {
+        //
+        // An empty id is exempt, because it is not a missing model — it is the
+        // user having chosen "None". Rescuing it picked the first installed
+        // polish model instead, so every launch quietly turned polish back on
+        // and the history recorded a model the user had switched off.
+        if !selectedID.isEmpty, location(of: selectedID) == nil {
             selectedID = bestInstalled() ?? ""
         }
     }
@@ -111,6 +118,7 @@ public final class ModelStore: ObservableObject {
     public func selectNone() {
         selectedID = ""
         UserDefaults.standard.set("", forKey: defaultsKey)
+        onSelectionChanged?(nil)
     }
 
     public func select(_ id: String) {
@@ -215,8 +223,7 @@ public final class ModelStore: ObservableObject {
         if let next = bundledFallback ?? bestInstalled() {
             select(next)
         } else {
-            selectedID = ""          // nothing usable; activeURL is nil
-            UserDefaults.standard.removeObject(forKey: defaultsKey)
+            selectNone()             // nothing usable; tell the engine too
         }
     }
 

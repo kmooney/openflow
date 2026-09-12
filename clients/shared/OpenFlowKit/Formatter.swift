@@ -36,11 +36,17 @@ public struct FormatResult: Sendable, Codable {
 /// Thin wrapper over the Rust core. All the logic that has to be *correct*
 /// lives on the other side of this call and is shared with every client.
 public enum Formatter {
-    public static func format(_ raw: String, tone: Tone) -> FormatResult {
+    /// `dictionary` is the user's shortcut file, verbatim -- `phrase =
+    /// replacement` lines. Parsing it is Rust's job, not Swift's, so that all
+    /// three clients expand the same file the same way.
+    public static func format(_ raw: String, tone: Tone,
+                              dictionary: String = "") -> FormatResult {
         let json: String = raw.withCString { ptr in
-            guard let out = of_format(ptr, tone.rawValue) else { return "" }
-            defer { of_string_free(out) }
-            return String(cString: out)
+            dictionary.withCString { dict in
+                guard let out = of_format(ptr, tone.rawValue, dict) else { return "" }
+                defer { of_string_free(out) }
+                return String(cString: out)
+            }
         }
         if let data = json.data(using: .utf8),
            let r = try? JSONDecoder().decode(FormatResult.self, from: data) {

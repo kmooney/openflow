@@ -67,6 +67,9 @@ pub struct App {
 
     pub vocabulary: VocabularyBook,
     vocabulary_text: String,
+    /// The dictionary file, verbatim. Not parsed here: `openflow-core` owns
+    /// the format so all three clients expand it identically.
+    dictionary_text: String,
 
     /// The window that had focus when the chord went down. The paste goes back
     /// to it, not to wherever focus has drifted by the time whisper finishes.
@@ -130,6 +133,7 @@ impl App {
             tone_source: Source::Fallback,
             vocabulary: VocabularyBook::default(),
             vocabulary_text: String::new(),
+            dictionary_text: String::new(),
             paste_target: None,
             last_foreground: Instant::now() - FOREGROUND_POLL,
             model_revision: models.selection_revision,
@@ -145,6 +149,7 @@ impl App {
             wake,
         };
         app.reload_vocabulary();
+        app.reload_dictionary();
         app.reload_history();
         app
     }
@@ -517,6 +522,43 @@ impl App {
         }
     }
 
+    // MARK: dictionary
+
+    pub fn dictionary_path(&self) -> PathBuf {
+        self.support.join("dictionary.txt")
+    }
+
+    /// Read the dictionary and hand it to the engine as text.
+    ///
+    /// A separate file from vocab.txt, because they do opposite jobs at
+    /// opposite ends of the pipeline: vocabulary steers what whisper hears, the
+    /// dictionary rewrites what it wrote.
+    pub fn reload_dictionary(&mut self) {
+        let path = self.dictionary_path();
+        if !path.exists() {
+            let _ = std::fs::write(&path, DICTIONARY_TEMPLATE);
+        }
+        self.dictionary_text = std::fs::read_to_string(&path).unwrap_or_default();
+        self.engine
+            .send(Command::SetDictionary(self.dictionary_text.clone()));
+    }
+
+    pub fn dictionary_entries(&self) -> Vec<openflow_core::dictionary::Entry> {
+        openflow_core::dictionary::parse(&self.dictionary_text)
+    }
+
+    /// Open dictionary.txt in whatever the user edits text with.
+    pub fn edit_dictionary(&mut self) {
+        let path = self.dictionary_path();
+        if !path.exists() {
+            let _ = std::fs::write(&path, DICTIONARY_TEMPLATE);
+        }
+        let _ = std::process::Command::new("cmd")
+            .args(["/c", "start", "", &path.to_string_lossy()])
+            .spawn();
+        self.set_status("Reload the dictionary when you have saved it.");
+    }
+
     /// Open vocab.txt in whatever the user edits text with.
     pub fn edit_vocabulary(&mut self) {
         let path = self.vocabulary_path();
@@ -599,9 +641,30 @@ const VOCAB_TEMPLATE: &str = "\
 # ssh
 ";
 
+const DICTIONARY_TEMPLATE: &str = "\
+# Your dictionary: say the phrase on the left, get the text on the right.
+# One entry per line. The replacement is inserted exactly as written --
+# no capitalization, no punctuation repair.
+#
+#   my email = you@example.com
+#   my number = (555) 123-4567
+#   my sign off = Best,\\nKevin
+#
+# \\n makes a line break. Lines starting with # are ignored.
+# Longer phrases win: \"my work email\" beats \"my email\".
+";
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// A fresh install must expand nothing: every line of the template is a
+    /// comment, and an example that fired would put text the user never typed
+    /// into their first message.
+    #[test]
+    fn the_dictionary_template_parses_to_nothing() {
+        assert!(openflow_core::dictionary::parse(DICTIONARY_TEMPLATE).is_empty());
+    }
 
     #[test]
     fn the_support_directory_is_under_the_users_roaming_profile() {

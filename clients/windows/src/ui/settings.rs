@@ -292,6 +292,47 @@ pub fn vocabulary(app: &mut OpenFlow, ui: &mut egui::Ui) {
             ui.add_space(8.0);
             seeding_sheet(app, ui);
         }
+
+        ui.add_space(16.0);
+        ui.heading("Dictionary");
+        ui.label(
+            egui::RichText::new(
+                "Say the phrase, get the text: \"my email = you@example.com\", one entry per line. This runs at the end of the pipeline, after the polish model \u{2014} so what you typed is exactly what gets pasted. Vocabulary is the opposite end: it steers what is heard.",
+            )
+            .weak()
+            .size(11.0),
+        );
+        let entries = app.app.dictionary_entries();
+        ui.label(
+            egui::RichText::new(if entries.len() == 1 {
+                "1 shortcut".to_string()
+            } else {
+                format!("{} shortcuts", entries.len())
+            })
+            .weak()
+            .size(11.0),
+        );
+        for entry in entries.iter().take(6) {
+            ui.label(
+                egui::RichText::new(format!(
+                    "{} \u{2192} {}",
+                    entry.phrase,
+                    entry.replacement.replace('\n', " \u{23ce} ")
+                ))
+                .weak()
+                .size(11.0),
+            );
+        }
+        ui.horizontal(|ui| {
+            if ui.button("Edit dictionary\u{2026}").clicked() {
+                app.app.edit_dictionary();
+            }
+            if ui.button("Reload dictionary").clicked() {
+                app.app.reload_dictionary();
+                let n = app.app.dictionary_entries().len();
+                app.app.set_status(&format!("{n} shortcuts loaded"));
+            }
+        });
     });
 }
 

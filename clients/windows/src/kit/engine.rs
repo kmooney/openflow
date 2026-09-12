@@ -68,6 +68,9 @@ pub enum Command {
     Cancel,
     SetTone(Tone),
     SetVocabulary(Vec<String>),
+    /// The dictionary file, verbatim. Parsing it belongs to `openflow-core`,
+    /// so macOS, iOS and Windows expand the same file the same way.
+    SetDictionary(String),
     SetModel(Option<PathBuf>),
     SetKeepAudio(bool),
     SetNoiseReduction(bool),
@@ -138,6 +141,7 @@ struct Engine {
     support: PathBuf,
     tone: Tone,
     vocabulary: Vec<String>,
+    dictionary: String,
     keep_audio: bool,
     noise_reduction: bool,
     reject_non_speech: bool,
@@ -165,6 +169,7 @@ fn run(
         support: config.support,
         tone: config.tone,
         vocabulary: Vec::new(),
+        dictionary: String::new(),
         keep_audio: config.keep_audio,
         noise_reduction: config.noise_reduction,
         reject_non_speech: config.reject_non_speech,
@@ -184,6 +189,7 @@ fn run(
             Command::Cancel => engine.cancel(),
             Command::SetTone(t) => engine.tone = t,
             Command::SetVocabulary(v) => engine.vocabulary = v,
+            Command::SetDictionary(d) => engine.dictionary = d,
             Command::SetModel(path) => engine.use_model(path),
             Command::SetKeepAudio(v) => engine.keep_audio = v,
             Command::SetNoiseReduction(v) => engine.noise_reduction = v,
@@ -374,7 +380,7 @@ impl Engine {
             );
         }
 
-        let result = formatter::format(&raw, self.tone);
+        let result = formatter::format(&raw, self.tone, &self.dictionary);
         let latency_ms = started.elapsed().as_millis() as i64;
 
         self.store.record(NewUtterance {

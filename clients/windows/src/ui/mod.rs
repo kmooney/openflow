@@ -100,6 +100,7 @@ impl OpenFlow {
                 tray::Command::Settings => self.show(ctx, Tab::General),
                 tray::Command::Models => self.show(ctx, Tab::Models),
                 tray::Command::EditVocabulary => self.app.edit_vocabulary(),
+                tray::Command::EditDictionary => self.app.edit_dictionary(),
                 tray::Command::PickTone(t) => self.app.choose_tone(t),
                 tray::Command::ForgetTone => self.app.forget_tone(None),
                 tray::Command::Quit => {

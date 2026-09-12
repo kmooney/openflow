@@ -119,7 +119,7 @@ fn a_recording_becomes_formatted_text() {
     }
 
     // 4. Formatting, through the same core the Swift clients reach by FFI.
-    let result = formatter::format(&raw, Tone::Formal);
+    let result = formatter::format(&raw, Tone::Formal, "");
     eprintln!("formatted: {}", result.formatted);
     assert!(
         result.ok,

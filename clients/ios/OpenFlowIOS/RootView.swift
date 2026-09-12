@@ -4,6 +4,7 @@ import OpenFlowKit
 struct RootView: View {
     @ObservedObject var state: AppState
     @State private var showingModels = false
+    @State private var showingWords = false
     @State private var showingSetup = false
 
     var body: some View {
@@ -26,6 +27,9 @@ struct RootView: View {
             .sheet(isPresented: $showingModels) {
                 ModelsView(models: state.models, polish: state.polish)
             }
+            .sheet(isPresented: $showingWords) {
+                WordsView(vocabulary: state.vocabulary, dictionary: state.dictionary)
+            }
             .sheet(isPresented: $showingSetup) { KeyboardSetupView() }
             .toolbar {
                 ToolbarItem(placement: .topBarTrailing) {
@@ -39,6 +43,12 @@ struct RootView: View {
                         Image(systemName: "waveform.circle")
                     }
                     .accessibilityLabel("Speech model")
+                }
+                ToolbarItem(placement: .topBarLeading) {
+                    Button { showingWords = true } label: {
+                        Image(systemName: "text.book.closed")
+                    }
+                    .accessibilityLabel("Words")
                 }
             }
         }
@@ -331,14 +341,15 @@ struct HistoryList: View {
                     // Their own line. Sharing the header row with the date,
                     // tone and word count left every cell too narrow and the
                     // text wrapped inside them.
-                    if modelName(u.speechModel) != nil || modelName(u.polishModel) != nil {
+                    if let speech = modelName(u.speechModel) {
                         HStack(spacing: 8) {
-                            if let speech = modelName(u.speechModel) {
-                                Label(speech, systemImage: "waveform")
-                            }
-                            if let polish = modelName(u.polishModel) {
-                                Label(polish, systemImage: "wand.and.sparkles")
-                            }
+                            Label(speech, systemImage: "waveform")
+                            // Named even when there was none. "No polish" and
+                            // no line at all look the same to a reader, and the
+                            // whole point of recording the model is being able
+                            // to tell two utterances apart afterwards.
+                            Label(modelName(u.polishModel) ?? "No polish",
+                                  systemImage: "wand.and.sparkles")
                             Spacer()
                         }
                         .font(.caption2)

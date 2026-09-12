@@ -1,10 +1,12 @@
 //! M0 spike: the tier-1 deterministic formatter, `normalize()`, and the
 //! round-trip guardrail. Throwaway code whose findings feed `openflow-core`.
 
-
 /// Prompt construction and reply cleanup for the polish stage. Shared so
 /// macOS, iOS and Windows ask the model the same question.
 pub mod polish;
+
+/// The user's own phrase → text substitutions, applied after the model.
+pub mod dictionary;
 
 // ---------------------------------------------------------------- config
 
@@ -150,7 +152,7 @@ fn remove_phrase(s: &str, phrase: &str) -> String {
 }
 
 /// Locate `phrase` in `hay` case-insensitively, respecting word boundaries.
-fn find_phrase(hay: &str, phrase: &str) -> Option<(usize, usize)> {
+pub(crate) fn find_phrase(hay: &str, phrase: &str) -> Option<(usize, usize)> {
     let h = hay.to_lowercase();
     let mut from = 0usize;
     while let Some(rel) = h[from..].find(phrase) {
@@ -562,9 +564,9 @@ const TLDS: &[&str] = &[
 /// Words that end a sentence more often than they start an address. Without
 /// this, "the dot com boom" becomes "the.com".
 const NOT_ADDRESS_STARTS: &[&str] = &[
-    "the", "a", "an", "this", "that", "these", "those", "my", "your", "our",
-    "is", "was", "are", "were", "of", "in", "on", "at", "to", "and", "or",
-    "but", "it", "its", "first", "second", "third", "one", "two", "three",
+    "the", "a", "an", "this", "that", "these", "those", "my", "your", "our", "is", "was", "are",
+    "were", "of", "in", "on", "at", "to", "and", "or", "but", "it", "its", "first", "second",
+    "third", "one", "two", "three",
 ];
 
 /// "h-t-t-p-s" -> "https". Whisper spells out letters it hears named
@@ -690,8 +692,7 @@ fn apply_addresses_line(s: &str) -> String {
                 }
                 // A run of single letters is one word taken apart.
                 let mut k = j;
-                while k + 1 < bare.len() && single_letter(&bare[k]) && single_letter(&bare[k + 1])
-                {
+                while k + 1 < bare.len() && single_letter(&bare[k]) && single_letter(&bare[k + 1]) {
                     k += 1;
                 }
                 end = k;
@@ -741,9 +742,7 @@ fn apply_addresses_line(s: &str) -> String {
                     // it only applies to whole words. A single letter inside a
                     // spelled-out run is never the English word: "m a i l"
                     // must not stop at its "a".
-                    if !single_letter(&bare[p])
-                        && NOT_ADDRESS_STARTS.contains(&bare[p].as_str())
-                    {
+                    if !single_letter(&bare[p]) && NOT_ADDRESS_STARTS.contains(&bare[p].as_str()) {
                         break;
                     }
                     // A run of single letters is one word taken apart. Take the
@@ -1312,6 +1311,9 @@ pub enum EditReason {
     /// A word consumed by structural formatting -- the "and" in "bread, and
     /// butter" when it becomes a bulleted list.
     Structure,
+    /// A dictionary entry the user wrote themselves: "my email" -> the
+    /// address. Not a repair and not a guess -- an instruction.
+    Shortcut,
     /// Anything else a stage wants to do. Denied by default.
     Other,
 }
@@ -1345,6 +1347,7 @@ impl Default for Policy {
                 EditReason::Vocabulary,
                 EditReason::SelfCorrection,
                 EditReason::Structure,
+                EditReason::Shortcut,
             ],
             max_edits: 3,
             max_changed_fraction: 0.25,
@@ -1441,8 +1444,13 @@ pub fn check_declared(
         let input_words = normalize(stage_input, cfg).len();
         // Count words *introduced*. Deleting a false start is the whole point
         // of a self-correction; inventing text is the danger worth budgeting.
-        let changed: usize = declared
-            .iter()
+        //
+        // Dictionary entries are outside the budget entirely. The budget exists
+        // to stop a *stage* rewording someone; an expansion the user wrote down
+        // themselves is the user rewording themselves, and a person with five
+        // shortcuts should not have their message reverted for using them.
+        let budgeted = || declared.iter().filter(|e| e.reason != EditReason::Shortcut);
+        let changed: usize = budgeted()
             .map(|e| {
                 let from = normalize(&e.from, cfg);
                 let to = normalize(&e.to, cfg);
@@ -1451,9 +1459,9 @@ pub fn check_declared(
             .sum();
         let ceiling = (input_words as f32 * policy.max_changed_fraction)
             .max(policy.always_allow_words as f32);
-        if declared.len() > policy.max_edits || (changed as f32) > ceiling {
+        if budgeted().count() > policy.max_edits || (changed as f32) > ceiling {
             return EditVerdict::OverBudget {
-                edits: declared.len(),
+                edits: budgeted().count(),
                 changed,
                 of: input_words,
             };
@@ -2062,11 +2070,14 @@ pub fn split_salutation(s: &str) -> (Option<String>, String) {
             }
             let sal = toks[..end].join(" ");
             let consumed: usize = s.find(&sal).map(|p| p + sal.len()).unwrap_or(0);
-            let body = s[consumed..].trim_start().to_string();
-            if body.is_empty() {
+            let body = s[consumed + 1..].trim_start().to_string();
+            let mut b: Vec<char> = body.chars().collect();
+            b[0] = b[0].to_uppercase().next().unwrap();
+            let final_body: String = b.into_iter().collect();
+            if final_body.is_empty() {
                 continue;
             }
-            return (Some(sal), body);
+            return (Some(sal), final_body);
         }
     }
     (None, s.to_string())
@@ -2084,10 +2095,61 @@ pub fn apply_letter_layout(s: &str, tone: Tone) -> String {
         split_salutation(s)
     };
     let body = apply_tone_with_signature(&rest, tone);
-    match sal {
+    let laid_out = match sal {
         None => body,
         Some(sal) => format!("{}\n\n{}", sal, body),
+    };
+    if tone == Tone::VeryCasual {
+        laid_out
+    } else {
+        space_paragraphs(&laid_out)
     }
+}
+
+/// A single newline between two sentences becomes a blank line.
+///
+/// A polish model that breaks paragraphs tends to do it with one newline, and
+/// on screen that reads as a wall of text with ragged edges rather than as an
+/// email. Email shape is blank lines, so this is where they are added.
+///
+/// Three things are deliberately left alone, because in each case the single
+/// newline is the right answer:
+///
+/// * a line that does not end a sentence -- a spoken "new line" mid-thought,
+///   and the blank line would split a sentence in half;
+/// * a sign-off ("Best," / "Kevin"), which ends in a comma;
+/// * anything touching a list item, where blank lines double the list's height
+///   for nothing.
+pub fn space_paragraphs(s: &str) -> String {
+    let lines: Vec<&str> = s.split('\n').collect();
+    let mut out = String::with_capacity(s.len() + 16);
+
+    for (i, line) in lines.iter().enumerate() {
+        out.push_str(line);
+        let Some(next) = lines.get(i + 1) else { continue };
+        let ends_sentence = line
+            .trim_end()
+            .chars()
+            .last()
+            .map(|c| matches!(c, '.' | '?' | '!' | '"' | '\u{201d}' | ')'))
+            .unwrap_or(false);
+        let touches_list = is_list_item(line) || is_list_item(next);
+        if ends_sentence && !touches_list && !next.trim().is_empty() {
+            out.push('\n');
+        }
+        out.push('\n');
+    }
+    out
+}
+
+fn is_list_item(line: &str) -> bool {
+    let t = line.trim_start();
+    if t.starts_with("- ") || t.starts_with("* ") {
+        return true;
+    }
+    // "1. " through "99. "
+    let digits: String = t.chars().take_while(|c| c.is_ascii_digit()).collect();
+    !digits.is_empty() && t[digits.len()..].starts_with(". ")
 }
 
 #[cfg(test)]
@@ -2109,7 +2171,10 @@ mod address_tests {
 
     #[test]
     fn rebuilds_a_bare_domain() {
-        assert_eq!(f("go to kevin dash mooney dot com"), "go to kevin-mooney.com");
+        assert_eq!(
+            f("go to kevin dash mooney dot com"),
+            "go to kevin-mooney.com"
+        );
     }
 
     #[test]
@@ -2148,7 +2213,11 @@ mod address_tests {
     #[test]
     fn collapses_spelled_letters() {
         assert_eq!(collapse_spelled("h-t-t-p-s").as_deref(), Some("https"));
-        assert_eq!(collapse_spelled("e-mail"), None, "two parts is a hyphenated word");
+        assert_eq!(
+            collapse_spelled("e-mail"),
+            None,
+            "two parts is a hyphenated word"
+        );
         assert_eq!(collapse_spelled("kevin"), None);
     }
 
@@ -2208,6 +2277,9 @@ mod address_shape_tests {
     /// A scheme said on its own is not an address and must not eat the sentence.
     #[test]
     fn a_bare_scheme_is_left_alone() {
-        assert_eq!(apply_addresses("https is a protocol"), "https is a protocol");
+        assert_eq!(
+            apply_addresses("https is a protocol"),
+            "https is a protocol"
+        );
     }
 }

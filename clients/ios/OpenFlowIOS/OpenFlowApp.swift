@@ -34,15 +34,32 @@ struct OpenFlowApp: App {
         NSLog("openflow: polish at launch — selected=%@ installed=%@ path=%@",
               polish.selectedID, polish.installed.sorted().joined(separator: ","),
               polish.activeURL?.path ?? "(none)")
+        // `URL?`, not `URL`: choosing "None" is a selection like any other,
+        // and a callback that could not express it meant the engine kept the
+        // last model loaded — so a user who turned polish off still had their
+        // text polished, and the history still recorded the model's name.
         polish.onSelectionChanged = { [weak engine] url in
-            engine?.polishModelPath = url.path
+            engine?.polishModelPath = url?.path ?? ""
         }
         engine.supportDirectory = support
         engine.warmUp()
-        models.onSelectionChanged = { [weak engine] url in engine?.useModel(at: url.path) }
+        models.onSelectionChanged = { [weak engine] url in
+            guard let url else { return }   // never for speech: a model is required
+            engine?.useModel(at: url.path)
+        }
+
+        // The two word lists, as files, at the same paths macOS uses. iOS had
+        // neither until now: `engine.vocabulary` was left empty on the one
+        // platform whose bundled model is the small one, which is exactly the
+        // platform that needs the help most.
+        let vocabulary = WordListStore(url: support.appendingPathComponent("vocab.txt"),
+                                       seed: vocabularySeed)
+        let dictionary = WordListStore(url: support.appendingPathComponent("dictionary.txt"),
+                                       seed: dictionarySeed)
 
         _state = StateObject(wrappedValue: AppState(
             engine: engine, store: store, models: models, polish: polish,
+            vocabulary: vocabulary, dictionary: dictionary,
             handoff: Handoff(appGroup: OpenFlowIDs.appGroup)))
     }
 
@@ -50,6 +67,13 @@ struct OpenFlowApp: App {
         WindowGroup {
             RootView(state: state)
                 .onChange(of: scenePhase) { _, phase in
+                    // A half-second debounce is not a guarantee against being
+                    // suspended; a word list the user typed and then swiped
+                    // away from must already be on disk.
+                    if phase != .active {
+                        state.vocabulary.save()
+                        state.dictionary.save()
+                    }
                     // Every arrival, not only a cold launch: coming back from
                     // the keyboard's "open the app" case looks identical to
                     // launching, and both mean the same thing — the user is

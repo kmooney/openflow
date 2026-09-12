@@ -37,10 +37,14 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         let engine = DictationEngine(modelPath: models.activeURL?.path ?? "", store: store)
         engine.supportDirectory = dir
         engine.warmUp()
-        models.onSelectionChanged = { [weak engine] url in engine?.useModel(at: url.path) }
+        models.onSelectionChanged = { [weak engine] url in
+            guard let url else { return }   // never for speech: a model is required
+            engine?.useModel(at: url.path)
+        }
 
         model = AppModel(engine: engine, store: store, models: models)
         model.reloadVocabulary(from: dir.appendingPathComponent("vocab.txt"))
+        model.reloadDictionary(from: dir.appendingPathComponent("dictionary.txt"))
         model.onRequestAccessibility = { [weak self] in self?.openAccessibilitySettings() }
         windowController = MainWindowController(model: model)
         preferences = PreferencesWindowController(model: model)
@@ -266,6 +270,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         add(menu, "Settings…", #selector(openPreferences), key: ",")
         add(menu, "Speech Model: \(model.activeModelName)…", #selector(openModels))
         add(menu, "Edit Vocabulary…", #selector(openVocab))
+        add(menu, "Edit Dictionary…", #selector(openDictionary))
         add(menu, "Quit OpenFlow", #selector(quit), key: "q")
         statusItem.menu = menu
     }
@@ -326,6 +331,35 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         NSWorkspace.shared.open(url)
         DispatchQueue.main.asyncAfter(deadline: .now() + 1) {
             self.model.reloadVocabulary(from: url)
+        }
+    }
+
+    /// The other word list: phrase in, exact text out.
+    ///
+    /// A separate file from vocab.txt rather than a section inside it. They do
+    /// opposite jobs at opposite ends of the pipeline — vocabulary steers what
+    /// whisper hears, the dictionary rewrites what it wrote — and a person
+    /// scanning one file should not have to keep that straight line by line.
+    @objc func openDictionary() {
+        let url = Self.supportDir.appendingPathComponent("dictionary.txt")
+        if !FileManager.default.fileExists(atPath: url.path) {
+            try? """
+            # Your dictionary: say the phrase on the left, get the text on the
+            # right. One entry per line. The replacement is inserted exactly as
+            # written -- no capitalization, no punctuation repair.
+            #
+            #   my email = you@example.com
+            #   my number = (555) 123-4567
+            #   my sign off = Best,\\nKevin
+            #
+            # \\n makes a line break. Lines starting with # are ignored.
+            # Longer phrases win: "my work email" beats "my email".
+
+            """.write(to: url, atomically: true, encoding: .utf8)
+        }
+        NSWorkspace.shared.open(url)
+        DispatchQueue.main.asyncAfter(deadline: .now() + 1) {
+            self.model.reloadDictionary(from: url)
         }
     }
 

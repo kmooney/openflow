@@ -1,3 +1,4 @@
+import Combine
 import Foundation
 import SwiftUI
 import UIKit
@@ -49,6 +50,10 @@ final class AppState: ObservableObject {
     let models: ModelStore
     /// The polish model, chosen the same way the speech model is.
     let polish: ModelStore
+    /// Terms handed to whisper before it listens.
+    let vocabulary: WordListStore
+    /// Phrase → text, applied after everything else.
+    let dictionary: WordListStore
     private let store: Store
     private let handoff: Handoff?
     private let liveActivity = LiveActivityController()
@@ -65,12 +70,18 @@ final class AppState: ObservableObject {
     /// NotificationCenter ones were silently never removed —
     /// `Handoff.removeObserver` ignores anything that is not its own box.
     private var localObservers: [NSObjectProtocol] = []
+    /// Combine, not NotificationCenter: the word lists are plain published
+    /// values and the engine only needs the latest one.
+    private var wordListSubscriptions: Set<AnyCancellable> = []
 
     init(engine: DictationEngine, store: Store, models: ModelStore,
-         polish: ModelStore, handoff: Handoff?) {
+         polish: ModelStore, vocabulary: WordListStore, dictionary: WordListStore,
+         handoff: Handoff?) {
         self.engine = engine
         self.models = models
         self.polish = polish
+        self.vocabulary = vocabulary
+        self.dictionary = dictionary
         self.store = store
         self.handoff = handoff
         self.stats = store.stats()
@@ -81,6 +92,17 @@ final class AppState: ObservableObject {
             ?? Tone(rawValue: UInt32(UserDefaults.standard.integer(forKey: "tone")))
             ?? .formal
         engine.tone = tone
+        // Both lists, now and on every edit. Re-read rather than parsed once at
+        // launch: the editor is in this app, so a term added at 3pm has to
+        // apply to the sentence dictated at 3:01.
+        engine.vocabulary = vocabulary.terms
+        engine.dictionary = dictionary.text
+        vocabulary.$text
+            .sink { [weak engine] text in engine?.vocabulary = Vocabulary.parse(text) }
+            .store(in: &wordListSubscriptions)
+        dictionary.$text
+            .sink { [weak engine] text in engine?.dictionary = text }
+            .store(in: &wordListSubscriptions)
         // `didSet` does not fire for the assignment in `init`, so on a fresh
         // install the container would hold no tone at all and the keyboard
         // would show Formal whatever the app was set to. Seed it, without

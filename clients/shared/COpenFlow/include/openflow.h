@@ -7,8 +7,10 @@ extern "C" {
 #endif
 
 /// tone: 0 = formal, 1 = casual, 2 = very casual.
+/// `dictionary` is the user's shortcut file -- "phrase = replacement" lines,
+/// one per line -- and may be NULL. Expansions are verbatim.
 /// Returns owned JSON; free with of_string_free. Never null.
-char *of_format(const char *input, unsigned int tone);
+char *of_format(const char *input, unsigned int tone, const char *dictionary);
 void  of_string_free(char *p);
 const char *of_version(void);
 

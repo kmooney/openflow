@@ -8,7 +8,8 @@
 //! `crates/openflow-ffi/src/lib.rs` deliberately and closely.
 
 use openflow_core::{
-    apply_letter_layout, check_declared, format_with_edits, Config, EditVerdict, Policy,
+    apply_letter_layout, check_declared, dictionary, format_with_edits, Config, EditVerdict,
+    Policy,
 };
 use serde::{Deserialize, Serialize};
 
@@ -64,28 +65,43 @@ impl FormatResult {
 /// Never panics out of here: on any internal failure it returns the input
 /// unchanged with `ok: false`, because dropping the user's words is worse than
 /// dropping the formatting.
-pub fn format(raw: &str, tone: Tone) -> FormatResult {
+/// `dict_text` is the user's dictionary file, verbatim -- "phrase =
+/// replacement" lines, empty for none.
+pub fn format(raw: &str, tone: Tone, dict_text: &str) -> FormatResult {
     let raw = raw.trim().to_string();
+    let dict_text = dict_text.to_string();
     let attempt = std::panic::catch_unwind({
         let raw = raw.clone();
         move || {
             let cfg = Config::default();
             let policy = Policy::default();
 
-            let (formatted, edits) = format_with_edits(&raw, &cfg);
-            let candidate = apply_letter_layout(&formatted, tone.core());
+            let (formatted, mut edits) = format_with_edits(&raw, &cfg);
+            // After the rules, before the layout: the replacement is verbatim,
+            // so nothing downstream may recapitalize or repunctuate it.
+            let (expanded, shortcuts) =
+                dictionary::apply(&formatted, &dictionary::parse(&dict_text));
+            edits.extend(shortcuts);
+            let candidate = apply_letter_layout(&expanded, tone.core());
             let verdict = check_declared(&raw, &candidate, &edits, &policy, &cfg);
 
+            // The verdict is **reported, not enforced** -- the same rule the
+            // other two clients follow, and it had drifted here. Checking an
+            // output against a transcript that is itself flawed only enforces
+            // the flaw: rebuilding a spoken address changes nearly every word,
+            // so this used to hand back the raw transcript and undo the one
+            // pass whose job was fixing what whisper got wrong. What replaces
+            // it is the audit trail below.
             let (out, ok, note) = match &verdict {
                 EditVerdict::Pass => (candidate, true, String::new()),
                 EditVerdict::Undeclared { dropped, added } => (
-                    raw.clone(),
+                    candidate,
                     false,
                     format!("undeclared dropped={dropped:?} added={added:?}"),
                 ),
-                EditVerdict::Forbidden(r) => (raw.clone(), false, format!("forbidden {r:?}")),
+                EditVerdict::Forbidden(r) => (candidate, false, format!("forbidden {r:?}")),
                 EditVerdict::OverBudget { edits, changed, of } => (
-                    raw.clone(),
+                    candidate,
                     false,
                     format!("over budget: {edits} edits, {changed} of {of} words"),
                 ),
@@ -130,7 +146,7 @@ mod tests {
 
     #[test]
     fn fillers_are_removed_and_the_guardrail_still_passes() {
-        let r = format("um so the deploy failed", Tone::Formal);
+        let r = format("um so the deploy failed", Tone::Formal, "");
         assert!(r.ok, "note: {}", r.note);
         assert!(!r.formatted.to_lowercase().starts_with("um"));
     }
@@ -139,7 +155,7 @@ mod tests {
     /// change the user cannot see is a change we did not declare.
     #[test]
     fn a_spoken_correction_is_declared_in_the_ledger() {
-        let r = format("the server is up scratch that the server is down", Tone::Formal);
+        let r = format("the server is up scratch that the server is down", Tone::Formal, "");
         assert!(r.ok, "note: {}", r.note);
         assert_eq!(r.formatted, "The server is down");
         assert!(
@@ -153,13 +169,13 @@ mod tests {
     /// survived the cleanup.
     #[test]
     fn spoken_words_counts_the_raw_transcript() {
-        let r = format("um so the deploy failed", Tone::Formal);
+        let r = format("um so the deploy failed", Tone::Formal, "");
         assert_eq!(r.spoken_words, 5);
     }
 
     #[test]
     fn the_ledger_round_trips_through_the_store_format() {
-        let r = format("um hello there", Tone::Formal);
+        let r = format("um hello there", Tone::Formal, "");
         let json = r.ledger_json();
         let back = LedgerEntry::decode(&json);
         assert_eq!(back, r.ledger);
@@ -173,15 +189,15 @@ mod tests {
 
     #[test]
     fn empty_input_is_handled() {
-        let r = format("   ", Tone::Formal);
+        let r = format("   ", Tone::Formal, "");
         assert_eq!(r.spoken_words, 0);
         assert!(r.formatted.is_empty());
     }
 
     #[test]
     fn tone_reaches_the_core() {
-        let formal = format("hey are you around", Tone::Formal);
-        let very_casual = format("hey are you around", Tone::VeryCasual);
+        let formal = format("hey are you around", Tone::Formal, "");
+        let very_casual = format("hey are you around", Tone::VeryCasual, "");
         assert_ne!(
             formal.formatted, very_casual.formatted,
             "the register has to change something or it is not a setting"

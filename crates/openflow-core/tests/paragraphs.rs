@@ -41,3 +41,41 @@ fn many_paragraphs_survive() {
     let (out, _) = format_with_edits(s, &Config::default());
     assert_eq!(out.matches("\n\n").count(), 3, "got: {out:?}");
 }
+
+// ------------------------------------------------- blank lines between them
+
+use openflow_core::{apply_letter_layout, space_paragraphs, Tone};
+
+/// The ask: a model that breaks paragraphs with one newline produces something
+/// that still reads as a wall of text. Email shape is blank lines.
+#[test]
+fn a_sentence_break_becomes_a_blank_line() {
+    let out = space_paragraphs("I enjoyed our chat.\nI wrote it up afterwards.");
+    assert_eq!(out, "I enjoyed our chat.\n\nI wrote it up afterwards.");
+}
+
+#[test]
+fn an_existing_blank_line_is_not_doubled() {
+    let out = space_paragraphs("One.\n\nTwo.");
+    assert_eq!(out, "One.\n\nTwo.");
+}
+
+/// A spoken "new line" mid-sentence is not a paragraph break.
+#[test]
+fn a_line_that_does_not_end_a_sentence_stays_tight() {
+    let out = space_paragraphs("12 Rye Lane\nLondon");
+    assert_eq!(out, "12 Rye Lane\nLondon");
+}
+
+#[test]
+fn a_sign_off_keeps_its_name_on_the_next_line() {
+    let out = apply_letter_layout("Hi Cynthia. Thanks for the call. Best, Kevin", Tone::Formal);
+    assert!(out.ends_with("Best,\nKevin"), "{out:?}");
+    assert!(out.starts_with("Hi Cynthia.\n\n"), "{out:?}");
+}
+
+#[test]
+fn lists_do_not_get_blank_lines() {
+    let out = space_paragraphs("Here it is.\n- one\n- two");
+    assert_eq!(out, "Here it is.\n- one\n- two");
+}

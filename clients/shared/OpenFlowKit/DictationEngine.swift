@@ -36,7 +36,19 @@ public final class DictationEngine {
     private let work = DispatchQueue(label: "openflow.dictation", qos: .userInitiated)
 
     public var tone: Tone = .formal
+    /// Terms whisper is told to expect. Names, jargon, product spellings --
+    /// this goes into the *transcription* prompt, where it biases what is
+    /// heard.
     public var vocabulary: [String] = []
+    /// The user's shortcut file, verbatim: `phrase = replacement` lines.
+    ///
+    /// The other half of the pair, and deliberately the opposite end of the
+    /// pipeline. Vocabulary steers what whisper hears; the dictionary rewrites
+    /// what it wrote, after the model has had its turn, so "my email" comes out
+    /// as the address exactly as typed rather than as something a 0.6B model
+    /// guessed.
+    public var dictionary: String = ""
+
     /// Keep the audio on disk for debugging. Off by default: the standing rule
     /// is transcribe-and-discard.
     public var keepAudio = false
@@ -509,7 +521,7 @@ public final class DictationEngine {
             // casual text quietly formalises it back. Applying them last means
             // nothing downstream can undo them.
             let polished = self.polished(raw, vocabulary: vocab)
-            let result = Formatter.format(polished, tone: tone)
+            let result = Formatter.format(polished, tone: tone, dictionary: dictionary)
             #if DEBUG
             // The pipeline, stage by stage. DEBUG only on purpose: this is the
             // user's speech, and an app whose whole claim is that nothing

@@ -357,6 +357,28 @@ final class AppModel: ObservableObject {
         clearStatusSoon()
     }
 
+    /// Read the dictionary file and hand it to the engine verbatim.
+    ///
+    /// Verbatim because parsing it is Rust's job — the same file has to expand
+    /// identically here, on iOS and on Windows, and three parsers would be
+    /// three sets of edge cases.
+    func reloadDictionary(from url: URL) {
+        dictionaryURL = url
+        engine.dictionary = (try? String(contentsOf: url, encoding: .utf8)) ?? ""
+        let entries = engine.dictionary
+            .split(separator: "\n")
+            .filter { line in
+                let t = line.trimmingCharacters(in: .whitespaces)
+                return !t.isEmpty && !t.hasPrefix("#") && t.contains("=")
+            }
+            .count
+        guard entries > 0 else { return }
+        status = entries == 1 ? "1 dictionary shortcut" : "\(entries) dictionary shortcuts"
+        clearStatusSoon()
+    }
+
+    private var dictionaryURL: URL?
+
     /// What the next utterance will be biased toward, for the settings pane.
     var vocabularyHere: [String] { vocabulary.terms(for: context) }
 
