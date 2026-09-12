@@ -25,11 +25,6 @@ char *of_polish_prompt(const char *transcript, const char *vocabulary, unsigned 
 /// Returns owned UTF-8; free with of_string_free. Never null.
 char *of_polish_clean(const char *reply, const char *transcript);
 
-/// Where this speaker's paragraph breaks fall, derived from the gaps between
-/// their own spoken segments. `gaps` is `count` values in milliseconds; null or
-/// too few yields a fixed default.
-long long of_paragraph_threshold_ms(const long long *gaps, size_t count);
-
 #ifdef __cplusplus
 }
 #endif

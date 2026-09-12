@@ -209,27 +209,6 @@ pub extern "C" fn of_polish_clean(
         .into_raw()
 }
 
-/// Where this speaker's paragraph breaks fall, from the gaps in one utterance.
-///
-/// Shared so every client breaks paragraphs at the same place. The loop that
-/// joins whisper's segments is a few lines and belongs with the whisper binding
-/// on each platform; deciding what counts as a pause is the part that must not
-/// drift.
-///
-/// `gaps` is `count` inter-segment gaps in milliseconds. A null pointer or a
-/// short list yields the fixed default.
-///
-/// # Safety
-/// `gaps` must point to `count` readable `int64_t` values, or be null.
-#[no_mangle]
-pub unsafe extern "C" fn of_paragraph_threshold_ms(gaps: *const i64, count: usize) -> i64 {
-    if gaps.is_null() || count == 0 {
-        return openflow_core::polish::PARAGRAPH_GAP_MS;
-    }
-    let slice = unsafe { std::slice::from_raw_parts(gaps, count) };
-    openflow_core::polish::paragraph_threshold_ms(slice)
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;

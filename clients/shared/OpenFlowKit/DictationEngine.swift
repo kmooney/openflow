@@ -478,10 +478,6 @@ public final class DictationEngine {
                 NSLog("openflow: lifted quiet capture by %.1f dB before transcription", gainDB)
             }
 
-            // The model lays out paragraphs when there is one; pauses only
-            // when there is not. Two mechanisms breaking the same text fight,
-            // and the worse one wins because it runs first.
-            transcriber.insertParagraphBreaks = polishModelPath.isEmpty
             var raw = transcriber.transcribe(samples: levelled, vocabulary: vocab)
 
             // A failed whisper run and a silent one both come back as "".
@@ -564,13 +560,6 @@ public final class DictationEngine {
                          speechModel: (modelPath as NSString).lastPathComponent,
                          polishModel: (polishModelPath as NSString).lastPathComponent,
                          polishedText: polished == raw ? "" : polished,
-                         breakTimes: transcriber.lastParagraphBreaks
-                             .map { String(format: "%.1f", $0) }
-                             .joined(separator: ","),
-                         pauses: transcriber.lastSegmentGaps
-                             .map { "\($0)" }.joined(separator: ",")
-                             + (transcriber.lastTimingWasSound ? "" : " (timing unusable)")
-                             + ";\(transcriber.lastParagraphThresholdMS)",
                          durationMS: audioMS,
                          latencyMS: latencyMS, guardrailPassed: result.ok,
                          ledger: ledgerJSON, appContext: appContext,

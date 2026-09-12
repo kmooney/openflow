@@ -233,60 +233,6 @@ struct Stat: View {
     }
 }
 
-/// The heard stage, with the timestamp of every paragraph break.
-///
-/// Breaks come from the speaker's own pauses, so a break in the wrong place is
-/// traceable to the moment that caused it — which is the only way to tell a
-/// bad threshold from a bad model.
-@ViewBuilder
-private func heardStage(_ u: Utterance) -> some View {
-    let paragraphs = u.rawText.components(separatedBy: "\n\n")
-    let times = u.breakTimes.split(separator: ",").compactMap { Double($0) }
-
-    VStack(alignment: .leading, spacing: 2) {
-        ForEach(Array(paragraphs.enumerated()), id: \.offset) { i, para in
-            HStack(alignment: .firstTextBaseline, spacing: 4) {
-                if i == 0 {
-                    Image(systemName: "ear").font(.caption2)
-                    Text("heard").font(.caption2.weight(.medium))
-                } else if i - 1 < times.count {
-                    // The pause that split this off, as m:ss.
-                    Text(stamp(times[i - 1]))
-                        .font(.caption2.monospacedDigit().weight(.medium))
-                } else {
-                    Text("¶").font(.caption2.weight(.medium))
-                }
-                Text(para).font(.caption2)
-            }
-        }
-    }
-    .foregroundStyle(.secondary)
-    .textSelection(.enabled)
-}
-
-/// The silence that was measured, and the bar it had to clear.
-///
-/// Visible because a paragraph break that does not happen looks identical to a
-/// feature that is switched off, and the difference is one number.
-@ViewBuilder
-private func pauseStage(_ pauses: String) -> some View {
-    let parts = pauses.split(separator: ";", maxSplits: 1)
-    if parts.count == 2, !parts[0].isEmpty {
-        HStack(alignment: .firstTextBaseline, spacing: 4) {
-            Image(systemName: "pause").font(.caption2)
-            Text("pauses").font(.caption2.weight(.medium))
-            Text("\(parts[0]) · break at \(parts[1]) ms")
-                .font(.caption2.monospacedDigit())
-        }
-        .foregroundStyle(.tertiary)
-        .textSelection(.enabled)
-    }
-}
-
-private func stamp(_ seconds: Double) -> String {
-    String(format: "%d:%02d", Int(seconds) / 60, Int(seconds) % 60)
-}
-
 /// One line of the audit trail: what a stage produced, labelled with which.
 @ViewBuilder
 private func stage(_ symbol: String, _ name: String, _ text: String) -> some View {
@@ -364,9 +310,8 @@ struct HistoryList: View {
                         // the one that got it wrong; a trail that only shows
                         // the ends cannot tell you which.
                         if !u.rawText.isEmpty, u.rawText != u.finalText {
-                            heardStage(u)
+                            stage("ear", "heard", u.rawText)
                         }
-                        pauseStage(u.pauses)
                         if !u.polishedText.isEmpty, u.polishedText != u.finalText {
                             stage("wand.and.sparkles", "polished", u.polishedText)
                         }
