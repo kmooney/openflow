@@ -97,11 +97,31 @@ fn unescape(s: &str) -> String {
 
 /// Expand every entry, returning the text and one declared `Edit` per
 /// substitution so the audit trail can show what was replaced.
+///
+/// A **structural** entry -- one whose replacement is whitespace, like
+/// `new graf = \n\n` -- also eats the punctuation on the side it touches.
+/// Said aloud, "call me at my number, new graf. I'm grateful" leaves a comma
+/// and a full stop stranded around the break:
+///
+/// ```text
+///     ...call me at (518) 588-3929,
+///
+///     . I'm grateful...
+/// ```
+///
+/// Those marks belonged to the spoken instruction, not to the sentence.
+/// Punctuation beside an ordinary text entry is left exactly where it is: the
+/// full stop in "reach me at my email." is the writer's, and dropping it would
+/// be the same mistake in the other direction.
 pub fn apply(s: &str, entries: &[Entry]) -> (String, Vec<Edit>) {
     let mut out = s.to_string();
     let mut edits = Vec::new();
 
     for entry in entries {
+        let eats_before = entry.replacement.starts_with(char::is_whitespace);
+        let eats_after = entry.replacement.ends_with(char::is_whitespace);
+        let opens_paragraph = entry.replacement.ends_with('\n');
+
         // Search forward from the end of each replacement rather than
         // restarting: an entry whose replacement contains its own phrase
         // ("my email = my email is kevin@...") would otherwise expand forever.
@@ -110,8 +130,21 @@ pub fn apply(s: &str, entries: &[Entry]) -> (String, Vec<Edit>) {
             let Some((a, b)) = find_phrase(&out[from..], &entry.phrase) else {
                 break;
             };
-            let (a, b) = (from + a, from + b);
-            out = format!("{}{}{}", &out[..a], entry.replacement, &out[b..]);
+            let (mut a, mut b) = (from + a, from + b);
+            if eats_before {
+                a = trim_back(&out, a);
+            }
+            if eats_after {
+                b = trim_forward(&out, b);
+            }
+            let mut tail = out[b..].to_string();
+            if opens_paragraph {
+                // The deterministic pass capitalized sentences before this ran,
+                // so a break introduced here starts on whatever case whisper
+                // heard -- "best kevin" rather than "Best kevin".
+                capitalize_first(&mut tail);
+            }
+            out = format!("{}{}{}", &out[..a], entry.replacement, tail);
             from = a + entry.replacement.len();
             edits.push(Edit {
                 from: entry.phrase.clone(),
@@ -121,6 +154,53 @@ pub fn apply(s: &str, entries: &[Entry]) -> (String, Vec<Edit>) {
         }
     }
     (out, edits)
+}
+
+/// Whitespace and the marks that cling to a spoken instruction. Not `-`, which
+/// is part of words, and not a quote, which has a partner elsewhere.
+fn is_trimmable(c: char) -> bool {
+    c.is_whitespace() || matches!(c, ',' | '.' | ';' | ':' | '!' | '?')
+}
+
+/// Walk `at` back over trimmable characters, stopping at a line break: a
+/// paragraph that is already there is not punctuation to absorb.
+fn trim_back(s: &str, at: usize) -> usize {
+    let mut at = at;
+    while let Some(c) = s[..at].chars().next_back() {
+        if !is_trimmable(c) || c == '\n' {
+            break;
+        }
+        at -= c.len_utf8();
+    }
+    at
+}
+
+fn trim_forward(s: &str, at: usize) -> usize {
+    let mut at = at;
+    while let Some(c) = s[at..].chars().next() {
+        if !is_trimmable(c) || c == '\n' {
+            break;
+        }
+        at += c.len_utf8();
+    }
+    at
+}
+
+fn capitalize_first(s: &mut String) {
+    let Some(i) = s.char_indices().find(|(_, c)| c.is_alphabetic()).map(|(i, _)| i) else {
+        return;
+    };
+    let c = s[i..].chars().next().unwrap();
+    if c.is_uppercase() {
+        return;
+    }
+    // Only if nothing but whitespace precedes it -- otherwise this is the
+    // middle of a sentence the replacement was inserted into.
+    if !s[..i].chars().all(char::is_whitespace) {
+        return;
+    }
+    let upper: String = c.to_uppercase().collect();
+    s.replace_range(i..i + c.len_utf8(), &upper);
 }
 
 #[cfg(test)]
@@ -177,6 +257,30 @@ mod tests {
         let d = parse("# a note\n\nno equals sign here\nok = fine\n = nothing\nempty =");
         assert_eq!(d.len(), 1);
         assert_eq!(d[0].phrase, "ok");
+    }
+
+    /// Verbatim from the phone: "new graf" is a spoken instruction, and the
+    /// comma and full stop around it belonged to the instruction.
+    #[test]
+    fn a_structural_entry_eats_the_punctuation_it_leaves_behind() {
+        let d = parse(r"new graf = \n\n");
+        let (out, _) = apply(
+            "You can call me at (518) 588-3929, new graf. I'm grateful for your time, new graf, best Kevin.",
+            &d,
+        );
+        assert_eq!(
+            out,
+            "You can call me at (518) 588-3929\n\nI'm grateful for your time\n\nBest Kevin."
+        );
+    }
+
+    /// The other direction: an ordinary entry must not swallow the writer's
+    /// own full stop.
+    #[test]
+    fn a_text_entry_leaves_punctuation_alone() {
+        let d = parse("my email = kevin@example.com");
+        let (out, _) = apply("Reach me at my email.", &d);
+        assert_eq!(out, "Reach me at kevin@example.com.");
     }
 
     #[test]
