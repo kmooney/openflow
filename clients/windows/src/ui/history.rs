@@ -174,6 +174,31 @@ fn row(app: &mut OpenFlow, ui: &mut egui::Ui, u: &crate::kit::store::Utterance) 
     };
     ui.label(text);
 
+    // The middle of the pipeline, when a polish model changed something.
+    if !u.polished_text.is_empty() && u.polished_text != u.final_text {
+        ui.label(
+            egui::RichText::new(format!("polished: {}", u.polished_text))
+                .weak()
+                .size(10.0),
+        );
+    }
+
+    // Which models produced this, recorded per utterance rather than read from
+    // the settings in force now. "No polish" is named rather than left blank: a
+    // missing line and a deliberate absence read identically.
+    if !u.speech_model.is_empty() {
+        let polish = if u.polish_model.is_empty() {
+            "No polish".to_string()
+        } else {
+            model_label(&u.polish_model)
+        };
+        ui.label(
+            egui::RichText::new(format!("{} \u{b7} {}", model_label(&u.speech_model), polish))
+                .weak()
+                .size(10.0),
+        );
+    }
+
     if showing_original {
         ui.label(
             egui::RichText::new("showing what you said, before formatting")
@@ -184,4 +209,15 @@ fn row(app: &mut OpenFlow, ui: &mut egui::Ui, u: &crate::kit::store::Utterance) 
             ui.label(egui::RichText::new(entry.description()).weak().size(10.0));
         }
     }
+}
+
+/// A model's display name from its file name, falling back to the name itself
+/// for anything not in the catalogue -- a hand-placed file, or one from a
+/// version that knew models this one does not.
+fn model_label(filename: &str) -> String {
+    crate::kit::models::CATALOG
+        .iter()
+        .find(|m| m.filename == filename)
+        .map(|m| m.display_name.to_string())
+        .unwrap_or_else(|| filename.trim_end_matches(".bin").to_string())
 }

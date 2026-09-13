@@ -33,9 +33,16 @@ struct ModelsView: View {
                             badge: model.rebuildsAddresses ? "rebuilds addresses" : nil)
                     }
                 } header: {
-                    Text("Polish")
+                    HStack(spacing: 6) {
+                        Text("Polish")
+                        Text("experimental")
+                            .font(.caption2)
+                            .padding(.horizontal, 5).padding(.vertical, 1)
+                            .background(.quaternary, in: Capsule())
+                            .textCase(nil)
+                    }
                 } footer: {
-                    Text("A language model that tidies the transcript before formatting. Every note is what was measured on real dictation — not what the model card claims. Only the largest rebuilt spoken web and email addresses correctly.")
+                    Text("Off by default, and worth leaving off unless you are trying it deliberately: a language model can improve the layout of a long message, and can also quietly change a word you said. Nothing is downloaded until you ask. Every note below is what was measured on real dictation — not what the model card claims.")
                 }
 
                 let used = models.diskUsage() + polish.diskUsage()

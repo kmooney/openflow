@@ -27,6 +27,14 @@ pub struct Utterance {
     pub audio_path: Option<String>,
     /// "ok", or why nothing came out: "silence", "steadyNoise", "empty".
     pub outcome: String,
+    /// Which models produced this. Stored per utterance rather than read from
+    /// the settings in force *now*, because the whole point of history is what
+    /// was true then. `polish_model` is empty when none ran, which is the
+    /// normal case: the polish stage is experimental and off by default.
+    pub speech_model: String,
+    pub polish_model: String,
+    /// What the polish model returned, when it changed anything.
+    pub polished_text: String,
 }
 
 #[derive(Clone, Copy, Debug, Default)]
@@ -53,6 +61,9 @@ pub struct NewUtterance<'a> {
     pub app_context: Option<&'a str>,
     pub audio_path: Option<&'a str>,
     pub outcome: &'a str,
+    pub speech_model: &'a str,
+    pub polish_model: &'a str,
+    pub polished_text: &'a str,
 }
 
 impl Store {
@@ -100,6 +111,17 @@ impl Store {
         let _ = db.execute_batch("ALTER TABLE utterances ADD COLUMN audio_path TEXT;");
         let _ = db
             .execute_batch("ALTER TABLE utterances ADD COLUMN outcome TEXT NOT NULL DEFAULT 'ok';");
+        // Same columns and the same order as the Swift store, so one database
+        // format still means one thing on every platform.
+        let _ = db.execute_batch(
+            "ALTER TABLE utterances ADD COLUMN speech_model TEXT NOT NULL DEFAULT '';",
+        );
+        let _ = db.execute_batch(
+            "ALTER TABLE utterances ADD COLUMN polish_model TEXT NOT NULL DEFAULT '';",
+        );
+        let _ = db.execute_batch(
+            "ALTER TABLE utterances ADD COLUMN polished_text TEXT NOT NULL DEFAULT '';",
+        );
         Ok(())
     }
 
@@ -108,8 +130,9 @@ impl Store {
         let result = db.execute(
             "INSERT INTO utterances
                (created_at,duration_ms,raw_text,final_text,tone,spoken_words,
-                latency_ms,guardrail_passed,ledger,app_context,audio_path,outcome)
-             VALUES (?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11,?12);",
+                latency_ms,guardrail_passed,ledger,app_context,audio_path,outcome,
+                speech_model,polish_model,polished_text)
+             VALUES (?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11,?12,?13,?14,?15);",
             params![
                 now(),
                 u.duration_ms,
@@ -123,6 +146,9 @@ impl Store {
                 u.app_context,
                 u.audio_path,
                 u.outcome,
+                u.speech_model,
+                u.polish_model,
+                u.polished_text,
             ],
         );
         match result {
@@ -157,7 +183,8 @@ impl Store {
         let filter = query.trim();
         let sql = format!(
             "SELECT id,created_at,duration_ms,raw_text,final_text,tone,spoken_words,
-                    latency_ms,guardrail_passed,ledger,audio_path,outcome
+                    latency_ms,guardrail_passed,ledger,audio_path,outcome,
+                    speech_model,polish_model,polished_text
              FROM utterances
              {}
              ORDER BY created_at DESC LIMIT ?2;",
@@ -188,6 +215,9 @@ impl Store {
                     .get::<_, Option<String>>(11)?
                     .filter(|s| !s.is_empty())
                     .unwrap_or_else(|| "ok".into()),
+                speech_model: row.get::<_, Option<String>>(12)?.unwrap_or_default(),
+                polish_model: row.get::<_, Option<String>>(13)?.unwrap_or_default(),
+                polished_text: row.get::<_, Option<String>>(14)?.unwrap_or_default(),
             })
         });
         match rows {
@@ -287,6 +317,9 @@ mod tests {
             app_context: Some("wt.exe"),
             audio_path: None,
             outcome: "ok",
+            speech_model: "ggml-small.en.bin",
+            polish_model: "",
+            polished_text: "",
         }
     }
 

@@ -21,11 +21,28 @@ let package = Package(
         .systemLibrary(name: "CWhisper", path: "shared/CWhisper"),
         .systemLibrary(name: "COpenFlow", path: "shared/COpenFlow"),
 
+        // llama.cpp, for the polish stage. A *dynamic* framework, and that is
+        // not incidental: whisper.cpp is linked statically here and vendors its
+        // own copy of ggml, so two static copies would collide at link time
+        // over every ggml symbol. The dylib keeps its ggml to itself.
+        .binaryTarget(name: "llama", path: "Frameworks/llama.xcframework"),
+
+        // The one translation unit that sees llama.h. The same file iOS
+        // compiles; see ofllama.c for why it exists at all.
+        .target(
+            name: "CLlamaShim",
+            dependencies: ["llama"],
+            path: "shared/CLlamaShim",
+            sources: ["ofllama.c"],
+            publicHeadersPath: "include",
+            cSettings: [.headerSearchPath("../CLlama/include")]
+        ),
+
         // Everything both platforms share: capture, inference, formatting,
         // history. No macOS-only API may appear here.
         .target(
             name: "OpenFlowKit",
-            dependencies: ["CWhisper", "COpenFlow"],
+            dependencies: ["CWhisper", "COpenFlow", "CLlamaShim"],
             path: "shared/OpenFlowKit",
             linkerSettings: [
                 .unsafeFlags([

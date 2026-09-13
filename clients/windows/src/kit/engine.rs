@@ -404,6 +404,11 @@ impl Engine {
             app_context,
             audio_path: audio_path.as_deref(),
             outcome: "ok",
+            speech_model: &self.speech_model_name(),
+            // Empty until this client has a polish stage. The column exists so
+            // a history database is the same shape on every platform.
+            polish_model: "",
+            polished_text: "",
         });
 
         self.emit(Event::State(State::Idle));
@@ -436,9 +441,25 @@ impl Engine {
             app_context,
             audio_path: audio_path.as_deref(),
             outcome,
+            speech_model: &self.speech_model_name(),
+            polish_model: "",
+            polished_text: "",
         });
         self.emit(Event::State(State::Idle));
         self.emit(Event::Failed(message.to_string()));
+    }
+}
+
+impl Engine {
+    /// The file name of the speech model in use, for the history row. The name
+    /// rather than the path: it is what the UI shows, and a path in a history
+    /// row is a leak waiting to happen.
+    fn speech_model_name(&self) -> String {
+        self.model_path
+            .as_ref()
+            .and_then(|p| p.file_name())
+            .map(|n| n.to_string_lossy().to_string())
+            .unwrap_or_default()
     }
 }
 

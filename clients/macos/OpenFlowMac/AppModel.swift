@@ -72,14 +72,20 @@ final class AppModel: ObservableObject {
     let engine: DictationEngine
     let memory: ToneMemory
     let models: ModelStore
+    /// The polish model, chosen the same way the speech model is. Its own
+    /// store over the same machinery — same downloads, same selection, same
+    /// deletion — because they are two catalogues, not two mechanisms.
+    let polish: ModelStore
     private let store: Store
     private var tick: Timer?
     private var bag = Set<AnyCancellable>()
 
-    init(engine: DictationEngine, store: Store, models: ModelStore) {
+    init(engine: DictationEngine, store: Store, models: ModelStore,
+         polish: ModelStore) {
         self.engine = engine
         self.store = store
         self.models = models
+        self.polish = polish
         self.stats = store.stats()
         let storedChord = UserDefaults.standard.object(forKey: "chord") as? Int
         self.chord = storedChord.map { ModifierChord(mask: UInt($0)) } ?? .default
@@ -378,6 +384,20 @@ final class AppModel: ObservableObject {
     }
 
     private var dictionaryURL: URL?
+
+    /// What the dictionary says, for the settings pane.
+    var dictionaryEntries: [(phrase: String, replacement: String)] {
+        ShortcutList.parse(engine.dictionary)
+    }
+
+    /// Re-read the dictionary from the path it was last loaded from. The file
+    /// is edited in a text editor, so nothing here knows when it changed.
+    func reloadDictionary() {
+        guard let dictionaryURL else { return }
+        reloadDictionary(from: dictionaryURL)
+    }
+
+    var onEditDictionary: (() -> Void)?
 
     /// What the next utterance will be biased toward, for the settings pane.
     var vocabularyHere: [String] { vocabulary.terms(for: context) }

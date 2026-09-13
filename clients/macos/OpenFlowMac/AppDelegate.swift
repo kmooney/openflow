@@ -34,7 +34,20 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         // than offering the download it is perfectly capable of doing.
         let models = ModelStore(directory: dir.appendingPathComponent("models"),
                                 defaultID: "small.en")
+        // The polish model. Same store, a different catalogue and a different
+        // defaults key — sharing one key would have a polish choice silently
+        // change which Whisper model was selected.
+        let polish = ModelStore(directory: dir.appendingPathComponent("polish"),
+                                defaultID: PolishCatalog.offID,
+                                catalog: PolishCatalog.all,
+                                defaultsKey: "selectedPolishModel")
         let engine = DictationEngine(modelPath: models.activeURL?.path ?? "", store: store)
+        // "Nothing" is a supported state, not a missing file: the deterministic
+        // rules still run without it.
+        engine.polishModelPath = polish.activeURL?.path ?? ""
+        polish.onSelectionChanged = { [weak engine] url in
+            engine?.polishModelPath = url?.path ?? ""
+        }
         engine.supportDirectory = dir
         engine.warmUp()
         models.onSelectionChanged = { [weak engine] url in
@@ -42,7 +55,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             engine?.useModel(at: url.path)
         }
 
-        model = AppModel(engine: engine, store: store, models: models)
+        model = AppModel(engine: engine, store: store, models: models, polish: polish)
         model.reloadVocabulary(from: dir.appendingPathComponent("vocab.txt"))
         model.reloadDictionary(from: dir.appendingPathComponent("dictionary.txt"))
         model.onRequestAccessibility = { [weak self] in self?.openAccessibilitySettings() }
@@ -50,6 +63,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         preferences = PreferencesWindowController(model: model)
         model.onShowPreferences = { [weak self] tab in self?.preferences.show(tab) }
         model.onEditVocabulary = { [weak self] in self?.openVocab() }
+        model.onEditDictionary = { [weak self] in self?.openDictionary() }
 
         // Menu bar mirrors the model rather than keeping its own copy.
         model.$state.sink { [weak self] in self?.render($0) }.store(in: &bag)

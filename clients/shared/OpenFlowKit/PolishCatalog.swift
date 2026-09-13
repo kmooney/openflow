@@ -39,6 +39,12 @@ public struct PolishModel: Identifiable, Hashable, Sendable, DownloadableModel {
 
 /// The polish models on offer.
 ///
+/// **Experimental, and off by default.** Nothing here is bundled and nothing is
+/// fetched until the user asks for it: a polish model is a several-hundred-
+/// megabyte download that can improve a long message's layout and can also
+/// quietly change a word that was said correctly. The deterministic rules are
+/// the supported path; this is the one that is still being measured.
+///
 /// Every note here is what was measured on real transcripts from a phone —
 /// three different renderings of the same spoken web address — not what a model
 /// card claims. Sizes are the real `content-length` of each file.

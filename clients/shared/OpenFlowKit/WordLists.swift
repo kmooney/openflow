@@ -55,12 +55,20 @@ public final class WordListStore: ObservableObject {
     public var terms: [String] { Vocabulary.parse(text) }
 
     /// Dictionary entries in this file, for the list in the UI.
-    ///
-    /// Display only. The expansion that actually happens is Rust's — see
-    /// `openflow_core::dictionary` — and this must never become a second
-    /// implementation of it. It is here because showing the user what the app
-    /// thinks it parsed is how a typo in their file becomes visible.
     public var shortcuts: [(phrase: String, replacement: String)] {
+        ShortcutList.parse(text)
+    }
+}
+
+/// What a dictionary file says, for showing back to the user.
+///
+/// Display only. The expansion that actually happens is Rust's — see
+/// `openflow_core::dictionary` — and this must never become a second
+/// implementation of it. It exists because showing someone what the app thinks
+/// it parsed is how a typo in their file becomes visible, and because both
+/// shells need the same list.
+public enum ShortcutList {
+    public static func parse(_ text: String) -> [(phrase: String, replacement: String)] {
         text.split(separator: "\n", omittingEmptySubsequences: false).compactMap { raw in
             let line = raw.trimmingCharacters(in: .whitespaces)
             guard !line.isEmpty, !line.hasPrefix("#"),

@@ -258,6 +258,39 @@ private struct VocabularyPane: View {
                     Button("Seed from Browser History…") { seeding = true }
                 }
             }
+
+            // The other list, and deliberately on the same pane: they are
+            // opposite ends of the same pipeline, and the difference is the
+            // thing worth keeping straight. Vocabulary goes into whisper's
+            // prompt and steers what is *heard*; the dictionary runs last,
+            // after the polish model, and rewrites what was *written*.
+            Section("Dictionary") {
+                Text("Say the phrase, get the text — “my email = you@example.com”, "
+                     + "one entry per line. The replacement is inserted exactly as "
+                     + "written, and “\\n” makes a line break. Trigger phrases are "
+                     + "given to whisper too, so an invented phrase still gets heard.")
+                    .font(.system(size: 10)).foregroundStyle(.secondary)
+                    .fixedSize(horizontal: false, vertical: true)
+
+                let entries = model.dictionaryEntries
+                LabeledContent("Shortcuts") {
+                    VStack(alignment: .leading, spacing: 4) {
+                        Text(entries.count == 1 ? "1 shortcut" : "\(entries.count) shortcuts")
+                            .font(.system(size: 11))
+                        ForEach(entries.prefix(6), id: \.phrase) { entry in
+                            Text("\(entry.phrase) → \(entry.replacement.replacingOccurrences(of: "\n", with: " ⏎ "))")
+                                .font(.system(size: 10, design: .monospaced))
+                                .foregroundStyle(.secondary)
+                                .lineLimit(1)
+                        }
+                    }
+                }
+
+                HStack {
+                    Button("Edit Dictionary…") { model.onEditDictionary?() }
+                    Button("Reload") { model.reloadDictionary() }
+                }
+            }
         }
         .formStyle(.grouped)
         .frame(height: 400)
@@ -279,10 +312,16 @@ private struct VocabularyPane: View {
 private struct ModelPane: View {
     @ObservedObject var model: AppModel
     @ObservedObject var models: ModelStore
+    /// The polish model's store. A second catalogue over the same machinery,
+    /// and the reason `Row` is written against the protocol rather than
+    /// against `WhisperModel`: downloading, selecting and deleting a large file
+    /// is the same job whichever catalogue it came from.
+    @ObservedObject var polish: ModelStore
 
     init(model: AppModel) {
         self.model = model
         self.models = model.models
+        self.polish = model.polish
     }
 
     var body: some View {
@@ -297,8 +336,26 @@ private struct ModelPane: View {
 
             ScrollView {
                 VStack(spacing: 0) {
+                    header("Speech")
                     ForEach(ModelCatalog.all) { m in
                         Row(models: models, model: m)
+                        Divider().opacity(0.4)
+                    }
+
+                    header("Polish — experimental")
+                    Text("A language model tidies the transcript before the "
+                         + "deterministic formatter runs. Off by default, and worth "
+                         + "leaving off unless you are trying it deliberately: it can "
+                         + "improve the layout of a long message, and can also quietly "
+                         + "change a word you said. Nothing is downloaded until you ask.")
+                        .font(.system(size: 10)).foregroundStyle(.secondary)
+                        .fixedSize(horizontal: false, vertical: true)
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                        .padding(.horizontal, 18).padding(.bottom, 8)
+                    noneRow
+                    Divider().opacity(0.4)
+                    ForEach(PolishCatalog.all) { m in
+                        Row(models: polish, model: m)
                         Divider().opacity(0.4)
                     }
                 }
@@ -307,24 +364,55 @@ private struct ModelPane: View {
             Divider()
 
             HStack(spacing: 10) {
-                if let error = models.lastError {
+                // Both stores. Only the speech store's errors were shown on
+                // iOS for a while, so a failed polish download reported nothing
+                // at all — which looks exactly like a button that does nothing.
+                if let error = models.lastError ?? polish.lastError {
                     Label(error, systemImage: "exclamationmark.triangle.fill")
                         .font(.system(size: 11)).foregroundStyle(.orange)
                         .lineLimit(2)
-                } else if models.diskUsage() > 0 {
-                    Text("\(ByteCountFormatter.string(fromByteCount: models.diskUsage(), countStyle: .file)) on disk")
+                } else if models.diskUsage() + polish.diskUsage() > 0 {
+                    Text("\(ByteCountFormatter.string(fromByteCount: models.diskUsage() + polish.diskUsage(), countStyle: .file)) on disk")
                         .font(.system(size: 11)).foregroundStyle(.secondary)
                 }
                 Spacer()
             }
             .padding(.horizontal, 18).padding(.vertical, 10)
         }
-        .frame(height: 400)
+        .frame(height: 460)
+    }
+
+    private func header(_ title: String) -> some View {
+        Text(title)
+            .font(.system(size: 11, weight: .semibold))
+            .foregroundStyle(.secondary)
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .padding(.horizontal, 18).padding(.top, 12).padding(.bottom, 6)
+    }
+
+    private var noneRow: some View {
+        let isSelected = polish.selectedID == PolishCatalog.offID
+        return HStack(alignment: .top, spacing: 10) {
+            Image(systemName: isSelected ? "checkmark.circle.fill" : "circle")
+                .foregroundStyle(isSelected ? Color.accentColor : Color.secondary)
+                .font(.system(size: 13))
+                .padding(.top, 1)
+            VStack(alignment: .leading, spacing: 3) {
+                Text("None").font(.system(size: 12, weight: .medium))
+                Text("Rules only. Fast, predictable, and cannot invent a word you did not say.")
+                    .font(.system(size: 10)).foregroundStyle(.secondary)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
+            Spacer(minLength: 8)
+        }
+        .padding(.horizontal, 18).padding(.vertical, 10)
+        .contentShape(Rectangle())
+        .onTapGesture { polish.selectNone() }
     }
 
     private struct Row: View {
         @ObservedObject var models: ModelStore
-        let model: WhisperModel
+        let model: any DownloadableModel
 
         private var isInstalled: Bool { models.installed.contains(model.id) }
         private var isSelected: Bool { models.selectedID == model.id }
@@ -340,7 +428,7 @@ private struct ModelPane: View {
                 VStack(alignment: .leading, spacing: 3) {
                     HStack(spacing: 6) {
                         Text(model.displayName).font(.system(size: 12, weight: .medium))
-                        Text(model.sizeDescription)
+                        Text(ByteCountFormatter.string(fromByteCount: model.bytes, countStyle: .file))
                             .font(.system(size: 10)).foregroundStyle(.secondary)
                         if models.isBundled(model.id) {
                             Text("included").font(.system(size: 9))

@@ -35,6 +35,23 @@ if [ ! -f "$WHISPER/build-static/src/libwhisper.a" ]; then
   cmake --build "$WHISPER/build-static" -j8 >/dev/null
 fi
 
+# llama.cpp, for the polish stage. The xcframework is shared with iOS and its
+# macOS slice is a *dynamic* framework -- see Package.swift for why that matters
+# next to a statically linked whisper.
+LLAMA=$ROOT/m0/llama.cpp
+LLAMA_XC=$PKG/Frameworks/llama.xcframework
+if [ ! -d "$LLAMA_XC" ]; then
+  if [ ! -d "$LLAMA/.git" ]; then
+    echo "==> cloning llama.cpp"
+    git clone --depth 1 https://github.com/ggml-org/llama.cpp.git "$LLAMA" >/dev/null 2>&1
+  fi
+  echo "==> llama.xcframework (slow: builds ggml for every slice)"
+  (cd "$LLAMA" && ./build-xcframework.sh >/dev/null 2>&1) || true
+  mkdir -p "$PKG/Frameworks"
+  cp -R "$LLAMA/build-apple/llama.xcframework" "$PKG/Frameworks/" 2>/dev/null \
+    || { echo "   llama.xcframework not produced; see $LLAMA/build-apple"; exit 1; }
+fi
+
 echo "==> swift"
 (cd "$PKG" && swift build -c release 2>&1 | grep -vE "was built for newer|^$") || true
 
@@ -42,6 +59,14 @@ echo "==> bundle"
 rm -rf "$APP"
 mkdir -p "$APP/Contents/MacOS" "$APP/Contents/Resources"
 cp "$PKG/.build/release/OpenFlowMac" "$APP/Contents/MacOS/OpenFlow"
+
+# The polish model's runtime. It is a dylib, so it has to travel with the app
+# and be findable from it: SwiftPM builds with an @loader_path rpath, which
+# points at Contents/MacOS, so the framework goes beside the binary rather than
+# in the conventional Contents/Frameworks. Without this the app launches
+# straight into "Library not loaded: @rpath/llama.framework".
+cp -R "$PKG/Frameworks/llama.xcframework/macos-arm64_x86_64/llama.framework" \
+   "$APP/Contents/MacOS/"
 # LSUIElement hides the Dock icon, but Finder, the About box and the
 # Accessibility permission prompt all still show one -- and an app asking for
 # the microphone should look like something rather than a blank page.

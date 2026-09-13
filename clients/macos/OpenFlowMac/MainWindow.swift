@@ -405,6 +405,30 @@ private struct Row: View {
                     .foregroundStyle(.secondary)
             }
 
+            // The middle of the pipeline, when a polish model changed
+            // something. Three stages produce this text and any of them can be
+            // the one that got it wrong; a trail that shows only the ends
+            // cannot tell you which.
+            if u.outcome == "ok", !u.polishedText.isEmpty, u.polishedText != u.finalText {
+                Label(u.polishedText, systemImage: "wand.and.sparkles")
+                    .font(.system(size: 10)).foregroundStyle(.secondary)
+                    .textSelection(.enabled)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
+
+            // Which models produced this, recorded per utterance rather than
+            // read from the settings in force now. "No polish" is named rather
+            // than left blank: a missing line and a deliberate absence read
+            // identically.
+            if let speech = modelName(u.speechModel) {
+                HStack(spacing: 8) {
+                    Label(speech, systemImage: "waveform")
+                    Label(modelName(u.polishModel) ?? "No polish",
+                          systemImage: "wand.and.sparkles")
+                }
+                .font(.system(size: 10)).foregroundStyle(.tertiary)
+            }
+
             if !ledger.isEmpty {
                 ForEach(Array(ledger.enumerated()), id: \.offset) { _, e in
                     Text(e.description)
@@ -430,4 +454,17 @@ private struct Row: View {
             Button("Delete", role: .destructive) { model.delete(u) }
         }
     }
+}
+
+/// A model's display name from its filename, or nil when none was recorded --
+/// which is every row written before the columns existed.
+private func modelName(_ filename: String) -> String? {
+    guard !filename.isEmpty else { return nil }
+    if let m = ModelCatalog.all.first(where: { $0.filename == filename }) {
+        return m.displayName
+    }
+    if let m = PolishCatalog.all.first(where: { $0.filename == filename }) {
+        return m.displayName
+    }
+    return (filename as NSString).deletingPathExtension
 }
